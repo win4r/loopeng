@@ -189,3 +189,16 @@ def test_no_progress_limit_must_be_positive():
     data["limits"] = {"no_progress_limit": 0}
     with pytest.raises(SpecError):
         parse_spec(data)
+
+
+def test_fingerprint_ignores_none_optional_fields():
+    import json
+    from dataclasses import asdict
+
+    from loopeng.spec import _strip_none, fingerprint
+
+    spec = parse_spec(valid_spec_dict())
+    # No None-valued optional (e.g. limits.no_output_timeout, verify.baseline) survives
+    # into the fingerprint payload, so adding such a field doesn't change the hash.
+    assert "null" not in json.dumps(_strip_none(asdict(spec)))
+    assert fingerprint(spec) == fingerprint(parse_spec(valid_spec_dict()))

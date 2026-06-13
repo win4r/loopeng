@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -127,6 +128,7 @@ def _parse_baseline(raw) -> BaselineSpec:
         value = float(raw.get("value"))
     except (TypeError, ValueError) as exc:
         raise SpecError(f"verify.baseline.value must be a number: {exc}") from exc
+    _require(math.isfinite(value), f"verify.baseline.value must be a finite number, got {value!r}")
     return BaselineSpec(regex=regex, direction=direction, value=value, name=str(raw.get("metric", "metric")))
 
 
@@ -237,12 +239,24 @@ def parse_spec(data, *, source: str = "<dict>") -> LoopSpec:
     )
 
 
+def _strip_none(obj):
+    """Recursively drop None-valued keys so adding an optional field that defaults to
+    None does not change the fingerprint of specs that don't use it."""
+    if isinstance(obj, dict):
+        return {k: _strip_none(v) for k, v in obj.items() if v is not None}
+    if isinstance(obj, list):
+        return [_strip_none(v) for v in obj]
+    return obj
+
+
 def fingerprint(spec: LoopSpec) -> str:
     """A stable hash of the spec's *meaning* (not its YAML formatting/comments).
 
     Used to detect whether a spec changed between an original run and a resume.
+    None-valued optional fields are omitted so introducing a new optional field
+    does not invalidate the fingerprint of specs that leave it unset.
     """
-    payload = json.dumps(asdict(spec), sort_keys=True, default=str)
+    payload = json.dumps(_strip_none(asdict(spec)), sort_keys=True, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 

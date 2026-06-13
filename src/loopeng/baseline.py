@@ -8,6 +8,7 @@ verifier exits 0 AND the baseline holds.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Optional, Tuple
@@ -54,6 +55,9 @@ def evaluate_baseline(baseline: BaselineSpec, output: str) -> Tuple[bool, Option
         actual = float(raw)
     except (TypeError, ValueError):
         return False, None, f"metric {baseline.name!r} value {raw!r} is not numeric"
+    if not math.isfinite(actual):
+        # inf/nan would silently pass a >/>= gate and emit non-standard JSON in the ledger.
+        return False, None, f"metric {baseline.name!r} value {raw!r} is not a finite number"
     if _compare(actual, baseline.direction, baseline.value):
         return True, actual, ""
     comparator = DIRECTIONS.get(baseline.direction, baseline.direction)

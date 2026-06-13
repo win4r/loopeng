@@ -19,13 +19,22 @@ def _b(direction, value, regex=r"score=([\d.]+)"):
     return BaselineSpec(regex=regex, direction=direction, value=value, name="score")
 
 
-def test_baseline_directions():
+def test_baseline_directions_with_boundaries():
     assert evaluate_baseline(_b("greater", 0.8), "score=0.9")[0] is True
-    assert evaluate_baseline(_b("greater", 0.8), "score=0.7")[0] is False
-    assert evaluate_baseline(_b("greater_equal", 0.8), "score=0.8")[0] is True
+    assert evaluate_baseline(_b("greater", 0.8), "score=0.8")[0] is False  # boundary excluded
+    assert evaluate_baseline(_b("greater_equal", 0.8), "score=0.8")[0] is True  # boundary included
     assert evaluate_baseline(_b("less", 5), "score=3")[0] is True
+    assert evaluate_baseline(_b("less", 5), "score=5")[0] is False  # boundary excluded
+    assert evaluate_baseline(_b("less_equal", 5), "score=5")[0] is True  # boundary included
     assert evaluate_baseline(_b("less_equal", 5), "score=6")[0] is False
     assert evaluate_baseline(_b("equal", 1), "score=1")[0] is True
+    assert evaluate_baseline(_b("equal", 1), "score=2")[0] is False
+
+
+def test_baseline_rejects_non_finite_metric():
+    ok, actual, reason = evaluate_baseline(_b("greater", 0.9, regex=r"score=(\S+)"), "score=inf")
+    assert ok is False and actual is None and "finite" in reason
+    assert evaluate_baseline(_b("greater", 0.9, regex=r"score=(\S+)"), "score=nan")[0] is False
 
 
 def test_baseline_metric_not_found():
@@ -77,6 +86,8 @@ def test_baseline_absent_by_default():
     {"regex": "(unclosed", "direction": "greater", "value": 1},  # bad regex
     {"regex": "x", "direction": "greater", "value": "high"},  # non-numeric value
     {"direction": "greater", "value": 1},  # missing regex
+    {"regex": "x", "direction": "greater", "value": "inf"},  # non-finite value
+    {"regex": "x", "direction": "greater", "value": "nan"},  # non-finite value
 ])
 def test_baseline_invalid_raises(bad):
     with pytest.raises(SpecError):
@@ -113,7 +124,26 @@ def test_baseline_fails_even_when_verify_exits_zero(tmp_path):
     iteration = [r for r in Ledger(result.ledger_path).records() if r["event"] == "iteration"][0]
     assert iteration["result"] == "fail"  # exit 0, but the metric gate failed
     assert iteration["baseline"]["ok"] is False
-    assert "baseline not met" in iteration["feedback"]
+    assert "baseline not met: score=0.5 not >= 0.9" in iteration["feedback"]  # pin the reason
+
+
+def test_baseline_reads_metric_from_stderr(tmp_path):
+    spec = _baseline_run_spec("import sys; sys.stderr.write('score=0.95\\n'); sys.exit(0)", _GATE)
+    result = run_loop(spec, tmp_path)
+    assert result.status == "success"  # feedback is combined stdout+stderr
+
+
+def test_baseline_failures_reach_no_progress(tmp_path):
+    spec = parse_spec({
+        "objective": "o",
+        "prompt": "{{feedback}}",
+        "agent": {"type": "shell", "command": [PY, "-c", "pass"]},
+        "verify": {"command": [PY, "-c", "print('score=0.50'); import sys; sys.exit(0)"], "baseline": _GATE},
+        "limits": {"max_iterations": 10, "max_consecutive_failures": 9, "no_progress_limit": 2},
+    })
+    result = run_loop(spec, tmp_path)
+    assert result.status == "no_progress"  # identical 'baseline not met' feedback -> no new evidence
+    assert result.iterations == 2
 
 
 def test_baseline_not_evaluated_when_verify_exits_nonzero(tmp_path):
