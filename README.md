@@ -67,11 +67,42 @@ limits:
 
 Every agent is a shell-callable command behind one contract
 (input: prompt/workspace/env; output: stdout/stderr/exit-code; controls: timeout/env/cwd;
-optional capabilities: resume / session_id / approval_mode / sandbox). The
-**generic `shell` adapter is the fully-working, tested path.** `claude-code`
-(`claude -p`) and `codex` (`codex exec`) are thin **presets** that preconfigure
-that adapter — their default flags are best-effort and not yet validated against
-a live binary; override `command:` to pin your own.
+optional capabilities: resume / session_id / approval_mode / sandbox).
+
+| `agent.type` | Default invocation | Binary required? | What it is |
+|---|---|---|---|
+| `shell` (and `mock`) | your `command` verbatim | no — a missing binary surfaces as exit 127 at runtime | the fully-working, tested path |
+| `claude-code` | `claude -p "<prompt>"` | **yes** — preflight resolves `claude` on PATH before the loop | a CLI **wrapper** around Claude Code headless mode |
+| `codex` | `codex exec "<prompt>"` | **yes** — preflight resolves `codex` on PATH | a CLI **wrapper** around the Codex CLI runner |
+
+```yaml
+# shell (default): run any command
+agent: { type: shell, command: ["python3", "samples/mock_agent.py"] }
+
+# Claude Code CLI wrapper (default binary `claude`, or pin a path/flags via command:)
+agent: { type: claude-code }
+agent: { type: claude-code, command: ["/opt/homebrew/bin/claude", "-p"] }
+
+# Codex CLI wrapper
+agent: { type: codex }
+```
+
+**Preflight.** Before the loop starts, loopeng resolves the adapter's binary. For
+`claude-code`/`codex` a missing binary **fails fast** (exit code `7`, ledger event
+`adapter_preflight_failed`, heartbeat phase `failed`) — the agent, verifier, and
+blast-radius gate never run. The `shell` adapter doesn't require its binary (a
+missing one just becomes a normal exit-127 failure). Check readiness without running:
+
+```bash
+loopeng doctor                 # uses ./loop.yaml
+loopeng doctor --json          # {"adapter_type": "...", "binary": "...", "resolved_path": "...", "ok": true/false}
+# exit: 0 ready · 7 binary missing/not-executable · 2 spec missing/invalid or adapter build error
+```
+
+**Explicit limitation:** `claude-code` and `codex` are **CLI wrappers, not deep API
+integrations** — loopeng shells out to the installed CLI and passes the prompt as an
+argument. The capability→flag mapping is best-effort; pin `command:` / confirm flags
+against your installed CLI version.
 
 ## Safety model
 
@@ -201,14 +232,16 @@ reuse can rarely make a crashed run's recycled pid read as live.)
 Internally the runner emits typed event dicts (`run_started`, `iteration_started`,
 `agent_started`/`agent_completed`, `blast_radius_started`/`_passed`/`_violation`,
 `verify_started`/`_passed`/`_failed`, `iteration_failed`, `run_completed`/`_blocked`/
-`_failed`, `resume_started`/`_loaded`/`_refused`, `heartbeat_written`, …). Each carries
+`_failed`, `resume_started`/`_loaded`/`_refused`, `adapter_preflight_passed`/`_failed`,
+`heartbeat_written`, …). Each carries
 `type`, `run_id`, and `ts` and is JSON-serializable, so it is ledger-compatible. The CLI
 renders them to the same human-readable output as before.
 
 ### Exit codes
 
 `0` success · `2` spec/adapter error · `3` blocked · `4` exhausted ·
-`5` precondition failed (dirty tree with `require_clean_git`) · `6` resume refused.
+`5` precondition failed (dirty tree with `require_clean_git`) · `6` resume refused ·
+`7` adapter preflight failed (configured agent binary not found).
 
 ## Not yet built (intentionally out of scope)
 

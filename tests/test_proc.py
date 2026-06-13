@@ -2,7 +2,7 @@
 
 import sys
 
-from loopeng.proc import EXIT_NOTFOUND, EXIT_TIMEOUT, run_proc
+from loopeng.proc import EXIT_NOTEXEC, EXIT_NOTFOUND, EXIT_TIMEOUT, run_proc
 
 PY = sys.executable or "python3"
 
@@ -26,6 +26,15 @@ def test_nonzero_exit_captured(tmp_path):
     assert result.exit_code == 3
     assert not result.ok
     assert "boom" in result.stderr
+
+
+def test_non_executable_binary_is_exit_126(tmp_path):
+    not_exec = tmp_path / "noexec"
+    not_exec.write_text("#!/bin/sh\necho hi\n")  # exists, but NOT chmod +x
+    result = run_proc([str(not_exec)], cwd=tmp_path, timeout=10)
+    assert result.exit_code == EXIT_NOTEXEC  # 126, not an uncaught PermissionError
+    assert not result.ok
+    assert "not executable" in result.stderr.lower()
 
 
 def test_success_exit_zero(tmp_path):

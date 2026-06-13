@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from .adapters import build_adapter
 from .errors import AdapterError, SpecError
 from .events import make_event
 from .heartbeat import HEARTBEAT_FILENAME, is_stale, pid_alive, read_heartbeat
@@ -189,7 +190,11 @@ def _render_event(event: dict) -> Optional[str]:
     if kind == "run_failed":
         if event.get("status") == "precondition_failed":
             return f"✗ precondition failed — {event.get('reason', 'working tree not clean at loop start')}"
+        if event.get("status") == "preflight_failed":
+            return None  # already surfaced by the adapter_preflight_failed event
         return f"✗ exhausted — reached max {event.get('limit')} iterations without passing"
+    if kind == "adapter_preflight_failed":
+        return f"✗ adapter preflight failed — {event.get('reason')}"
     if kind == "resume_refused":
         return f"✗ resume refused — {event.get('message') or event.get('reason')}"
     return None
@@ -260,20 +265,35 @@ def cmd_run(args) -> int:
         f"| run: {result.run_id} | ledger: {result.ledger_path}"
     )
     # Exit codes are CI-friendly: 0 success, non-zero for every other outcome.
-    # 2 spec/adapter error, 3 blocked, 4 exhausted, 5 precondition_failed, 6 resume refused.
-    return {"success": 0, "blocked": 3, "exhausted": 4, "precondition_failed": 5}.get(
-        result.status, 1
-    )
+    # 2 spec/adapter error, 3 blocked, 4 exhausted, 5 precondition_failed,
+    # 6 resume refused, 7 adapter preflight failed.
+    return {
+        "success": 0,
+        "blocked": 3,
+        "exhausted": 4,
+        "precondition_failed": 5,
+        "preflight_failed": 7,
+    }.get(result.status, 1)
 
 
 def cmd_status(args) -> int:
     state_dir = Path(args.dir) / STATE_DIR
     heartbeat = read_heartbeat(state_dir / HEARTBEAT_FILENAME)
-    last_event = None
     ledger_path = state_dir / "ledger.jsonl"
-    if ledger_path.exists():
-        records = Ledger(ledger_path).records()
-        last_event = records[-1] if records else None
+    records = Ledger(ledger_path).records() if ledger_path.exists() else []
+    last_event = records[-1] if records else None
+
+    adapter_preflight = None
+    for record in records:
+        if record.get("event") in ("adapter_preflight_passed", "adapter_preflight_failed"):
+            adapter_preflight = {
+                "ok": record.get("event") == "adapter_preflight_passed",
+                "adapter_type": record.get("adapter_type"),
+                "binary": record.get("binary"),
+                "resolved_path": record.get("resolved_path"),
+                "reason": record.get("reason", ""),
+                "ts": record.get("ts"),
+            }
 
     stale = is_stale(heartbeat)
     hb = heartbeat or {}
@@ -292,6 +312,7 @@ def cmd_status(args) -> int:
         "spec_path": hb.get("spec_path"),
         "spec_fingerprint": hb.get("spec_fingerprint"),
         "cwd": hb.get("cwd"),
+        "adapter_preflight": adapter_preflight,
         "last_event": last_event,
     }
 
@@ -307,6 +328,37 @@ def cmd_status(args) -> int:
             f"{'STALE' if stale else 'live'} (updated {report['updated_at']})"
         )
     return 0
+
+
+def cmd_doctor(args) -> int:
+    spec_path = Path(args.spec)
+    try:
+        spec = load_spec(spec_path)
+    except (SpecError, AdapterError) as exc:
+        print(f"spec error: {exc}", file=sys.stderr)
+        return 2
+    try:
+        adapter = build_adapter(spec.agent)
+    except AdapterError as exc:
+        print(f"adapter error: {exc}", file=sys.stderr)
+        return 2
+
+    workspace = (spec_path.resolve().parent / spec.workspace).resolve()
+    pf = adapter.preflight(cwd=workspace)
+    report = {
+        "adapter_type": pf.adapter_type,
+        "binary": pf.binary,
+        "resolved_path": pf.resolved_path,
+        "ok": pf.ok,
+        "reason": pf.reason,
+    }
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False))
+    elif pf.ok:
+        print(f"adapter {pf.adapter_type!r}: OK — binary={pf.binary!r} resolved={pf.resolved_path!r}")
+    else:
+        print(f"adapter {pf.adapter_type!r}: NOT READY — {pf.reason}", file=sys.stderr)
+    return 0 if pf.ok else 7
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -352,6 +404,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status_parser.add_argument("--json", action="store_true", help="emit a single JSON object")
     status_parser.set_defaults(func=cmd_status)
+
+    doctor_parser = sub.add_parser(
+        "doctor", help="check the configured agent adapter's binary is available"
+    )
+    doctor_parser.add_argument(
+        "--spec", default="loop.yaml", help="path to the loop spec (default: loop.yaml)"
+    )
+    doctor_parser.add_argument("--json", action="store_true", help="emit a single JSON object")
+    doctor_parser.set_defaults(func=cmd_doctor)
 
     return parser
 
