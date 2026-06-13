@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Union
 
+from .blast_radius import BlastRadiusPolicy
 from .errors import SpecError
 
 ALLOWED_AGENT_TYPES = ("shell", "mock", "claude-code", "codex")
@@ -51,11 +52,41 @@ class LoopSpec:
     workspace: str = "."
     context: Dict[str, object] = field(default_factory=dict)
     limits: Limits = field(default_factory=Limits)
+    blast_radius: BlastRadiusPolicy = field(default_factory=BlastRadiusPolicy)
 
 
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise SpecError(message)
+
+
+def _parse_blast_radius(limits_raw: dict) -> BlastRadiusPolicy:
+    """Blast-radius keys live under ``limits:`` in the spec (see README)."""
+
+    def _str_list(key: str) -> List[str]:
+        value = limits_raw.get(key, []) or []
+        _require(
+            isinstance(value, list) and all(isinstance(item, str) for item in value),
+            f"limits.{key} must be a list of strings",
+        )
+        return list(value)
+
+    max_changed_raw = limits_raw.get("max_changed_files", None)
+    if max_changed_raw is None:
+        max_changed_files = None
+    else:
+        try:
+            max_changed_files = int(max_changed_raw)
+        except (TypeError, ValueError) as exc:
+            raise SpecError(f"limits.max_changed_files must be an integer: {exc}") from exc
+        _require(max_changed_files >= 0, "limits.max_changed_files must be >= 0")
+
+    return BlastRadiusPolicy(
+        require_clean_git=bool(limits_raw.get("require_clean_git", False)),
+        max_changed_files=max_changed_files,
+        allowed_paths=_str_list("allowed_paths"),
+        forbidden_paths=_str_list("forbidden_paths"),
+    )
 
 
 def _as_command(value, field_name: str) -> Command:
@@ -135,17 +166,21 @@ def parse_spec(data, *, source: str = "<dict>") -> LoopSpec:
 
     limits_raw = data.get("limits", {}) or {}
     _require(isinstance(limits_raw, dict), "limits must be a mapping")
+    # `timeout_seconds` is the preferred key; `command_timeout` stays as an alias.
+    timeout_raw = limits_raw.get("timeout_seconds", limits_raw.get("command_timeout", 120))
     try:
         limits = Limits(
             max_iterations=int(limits_raw.get("max_iterations", 10)),
             max_consecutive_failures=int(limits_raw.get("max_consecutive_failures", 3)),
-            command_timeout=int(limits_raw.get("command_timeout", 120)),
+            command_timeout=int(timeout_raw),
         )
     except (TypeError, ValueError) as exc:
         raise SpecError(f"limits values must be integers: {exc}") from exc
     _require(limits.max_iterations >= 1, "limits.max_iterations must be >= 1")
     _require(limits.max_consecutive_failures >= 1, "limits.max_consecutive_failures must be >= 1")
-    _require(limits.command_timeout > 0, "limits.command_timeout must be > 0")
+    _require(limits.command_timeout > 0, "limits.command_timeout (timeout_seconds) must be > 0")
+
+    blast_radius = _parse_blast_radius(limits_raw)
 
     return LoopSpec(
         objective=objective,
@@ -155,6 +190,7 @@ def parse_spec(data, *, source: str = "<dict>") -> LoopSpec:
         workspace=workspace,
         context=context,
         limits=limits,
+        blast_radius=blast_radius,
     )
 
 

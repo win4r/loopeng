@@ -39,8 +39,32 @@ verify:
 
 limits:
   max_iterations: 5
-  max_consecutive_failures: 3
-  command_timeout: 30
+  max_consecutive_failures: 2
+  timeout_seconds: 60
+
+  # --- Blast-radius controls: a repository write-set gate, NOT a sandbox. ---
+  # These only take effect when the workspace is a git repository; otherwise the
+  # gate is skipped with a warning. See the README "Safety model" section.
+  max_changed_files: 10
+  # Deny edits to dangerous paths (enforced when run inside a git repo).
+  # Note: `.git/` internals are invisible to a git-status-based gate, so a
+  # ".git/**" pattern here would be inert — protect those via a real sandbox.
+  forbidden_paths:
+    - ".env"
+    - ".env.*"
+    - "secrets/**"
+    - "infra/prod/**"
+    - "pyproject.toml"
+    - "uv.lock"
+  # Set true (inside a git repo) to require a clean tree before the run starts.
+  # Left false here so `loopeng init && loopeng run` works in a fresh dir.
+  require_clean_git: false
+  # Restrict edits to an allowlist (recommended for real code projects). Left
+  # commented so the sample's output.txt is not rejected; uncomment to enforce:
+  # allowed_paths:
+  #   - "src/**"
+  #   - "tests/**"
+  #   - "README.md"
 """
 
 MOCK_AGENT = '''#!/usr/bin/env python3
@@ -139,7 +163,9 @@ def cmd_run(args) -> int:
         f"| ledger: {result.ledger_path}"
     )
     # Exit codes are CI-friendly: 0 success, non-zero for every other outcome.
-    return {"success": 0, "blocked": 3, "exhausted": 4}.get(result.status, 1)
+    return {"success": 0, "blocked": 3, "exhausted": 4, "precondition_failed": 5}.get(
+        result.status, 1
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

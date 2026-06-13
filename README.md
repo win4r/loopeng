@@ -73,6 +73,68 @@ optional capabilities: resume / session_id / approval_mode / sandbox). The
 that adapter — their default flags are best-effort and not yet validated against
 a live binary; override `command:` to pin your own.
 
+## Safety model
+
+loopeng can apply **blast-radius controls** — a **repository write-set gate**, not a
+security sandbox. After the agent runs (and *before* the verifier), loopeng asks git
+what changed and rejects the iteration if the change set steps outside the bounds you
+declared. Configure it under `limits:`:
+
+```yaml
+limits:
+  max_iterations: 5
+  max_consecutive_failures: 2
+  timeout_seconds: 60
+
+  require_clean_git: true        # fail early if the tree is dirty at loop start
+  max_changed_files: 10          # cap how many paths one run may touch
+  allowed_paths:                 # if set, every changed path must match one of these
+    - "src/**"
+    - "tests/**"
+    - "README.md"
+  forbidden_paths:               # any matching changed path fails the iteration
+    - ".env"
+    - ".env.*"
+    - "secrets/**"
+    - "infra/prod/**"
+    - "pyproject.toml"
+    - "uv.lock"
+```
+
+Patterns are authored **relative to the workspace**. `allowed_paths`/`forbidden_paths`
+glob examples like `src/**` and `.env` match the agent's changes after they are
+normalized to workspace-relative paths.
+
+**How it behaves**
+
+- `require_clean_git: true` → if the working tree is dirty at loop start, the run
+  **aborts early** (exit code `5`, ledger event `blast_radius_precondition_failed`)
+  so pre-existing edits are never attributed to the agent.
+- After each agent step, loopeng computes the agent's change set with
+  `git status --porcelain -z --untracked-files=all` (so individual files inside new
+  directories are listed, and **untracked, deleted, and renamed** files all count —
+  not just `git diff`), relative to the loop-start baseline.
+- A change that hits `forbidden_paths`, falls outside a non-empty `allowed_paths`,
+  or exceeds `max_changed_files` is a **`blast_radius_violation`**: the iteration
+  fails, the verifier is skipped, the violation is recorded in the ledger, and it
+  **counts toward `max_consecutive_failures`** (so repeated violations trip the
+  circuit breaker → `blocked`). The violation detail is fed back into the next
+  prompt, so an agent can self-correct by reverting the offending change.
+
+Path matching is gitignore-lite: `**` crosses directories, `*` stays within one
+segment, `?` matches a single non-separator character.
+
+**Explicit limitation.** This is **not a security sandbox**. It only observes the
+git worktree *after* the agent runs, and only when the workspace is a git repository
+(otherwise the gate is skipped with a warning). It does **not** stop network access,
+data exfiltration, writes outside the repo, or destructive commands — it constrains
+the **repository write-set** only. Specifically: it matches path strings and does
+**not resolve symlinks**, so an agent could create a symlink inside an allowed path
+and write through it to a location outside the repo without tripping the gate; and
+`.git/` internals are invisible to `git status`, so they cannot be constrained by
+`forbidden_paths`. For real isolation, run the agent in a container, VM, or a
+dedicated sandbox.
+
 ## Not yet built (intentionally out of scope)
 
 Multi-agent orchestration, daemon mode, MCP integration, web UI, publishing.
