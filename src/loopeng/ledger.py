@@ -26,8 +26,9 @@ class Ledger:
     def append(self, record: dict) -> None:
         # Every line is timestamped; caller-supplied keys win over nothing here.
         line = {"ts": utcnow_iso(), **record}
+        # allow_nan=False keeps the ledger valid JSON (no bare Infinity/NaN tokens).
         with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(line, ensure_ascii=False) + "\n")
+            handle.write(json.dumps(line, ensure_ascii=False, allow_nan=False) + "\n")
 
     def records(self) -> List[dict]:
         if not self.path.exists():

@@ -65,6 +65,34 @@ limits:
   command_timeout: 30
 ```
 
+### Verification baseline (optional metric gate)
+
+On top of the deterministic exit-0 check, a verifier can be required to meet a numeric
+threshold. A `regex` extracts a metric from the verifier's output (first capture group,
+else the whole match) and compares it against `value` in a `direction`. The iteration
+passes only when the verifier **exits 0 AND** the baseline holds; otherwise the baseline
+reason is fed back to the agent.
+
+```yaml
+verify:
+  command: ["pytest", "--cov", "-q"]
+  baseline:
+    metric: coverage                 # label for messages (default "metric")
+    regex: "TOTAL.* ([0-9.]+)%"       # captures the number to compare
+    direction: greater_equal          # greater | greater_equal | less | less_equal | equal
+    value: 90
+```
+
+The baseline is only consulted when the verifier exits 0 (a non-zero exit already fails
+the iteration). A missing, non-numeric, or non-finite (`inf`/`nan`) metric **fails** the gate.
+
+**Regex tips** (the metric string is yours to control): `re.search` returns the *first*
+match, so anchor the pattern to the line you mean (e.g. `TOTAL.* ([0-9.]+)%`); include a
+leading `-?` if the metric can be negative; and broaden the character class (e.g.
+`[-+0-9.eE]+`) if the verifier may print scientific notation. The `equal` direction uses
+exact floating-point equality — prefer it for integer-valued metrics (e.g. `errors == 0`)
+and use `greater_equal`/`less_equal` for fractional targets.
+
 ## Agents
 
 Every agent is a shell-callable command behind one contract

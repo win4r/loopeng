@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
+from .baseline import DIRECTIONS, BaselineSpec
 from .blast_radius import BlastRadiusPolicy
 from .errors import SpecError
 
@@ -45,6 +48,7 @@ class AgentSpec:
 @dataclass
 class VerifySpec:
     command: object  # Command — the deterministic gate
+    baseline: Optional[BaselineSpec] = None  # optional numeric threshold on top of exit 0
 
 
 @dataclass
@@ -107,6 +111,27 @@ def _as_command(value, field_name: str) -> Command:
     raise SpecError(f"{field_name} must be a string or a list of strings")
 
 
+def _parse_baseline(raw) -> BaselineSpec:
+    _require(isinstance(raw, dict), "verify.baseline must be a mapping")
+    regex = raw.get("regex")
+    _require(isinstance(regex, str) and regex.strip(), "verify.baseline.regex is required (a string)")
+    try:
+        re.compile(regex)
+    except re.error as exc:
+        raise SpecError(f"verify.baseline.regex is not a valid regex: {exc}") from exc
+    direction = raw.get("direction")
+    _require(
+        direction in DIRECTIONS,
+        f"verify.baseline.direction must be one of {sorted(DIRECTIONS)}, got {direction!r}",
+    )
+    try:
+        value = float(raw.get("value"))
+    except (TypeError, ValueError) as exc:
+        raise SpecError(f"verify.baseline.value must be a number: {exc}") from exc
+    _require(math.isfinite(value), f"verify.baseline.value must be a finite number, got {value!r}")
+    return BaselineSpec(regex=regex, direction=direction, value=value, name=str(raw.get("metric", "metric")))
+
+
 def parse_spec(data, *, source: str = "<dict>") -> LoopSpec:
     """Validate a plain dict (already-parsed YAML) into a LoopSpec."""
     _require(isinstance(data, dict), f"{source}: the top level must be a mapping")
@@ -152,11 +177,14 @@ def parse_spec(data, *, source: str = "<dict>") -> LoopSpec:
         verify_raw is not None,
         "verify is required — a deterministic gate is the load-bearing half of the loop",
     )
+    baseline = None
     if isinstance(verify_raw, dict):
         verify_command = _as_command(verify_raw.get("command"), "verify.command")
+        if verify_raw.get("baseline") is not None:
+            baseline = _parse_baseline(verify_raw["baseline"])
     else:
         verify_command = _as_command(verify_raw, "verify")
-    verify = VerifySpec(command=verify_command)
+    verify = VerifySpec(command=verify_command, baseline=baseline)
 
     workspace = data.get("workspace", ".")
     _require(
@@ -211,12 +239,24 @@ def parse_spec(data, *, source: str = "<dict>") -> LoopSpec:
     )
 
 
+def _strip_none(obj):
+    """Recursively drop None-valued keys so adding an optional field that defaults to
+    None does not change the fingerprint of specs that don't use it."""
+    if isinstance(obj, dict):
+        return {k: _strip_none(v) for k, v in obj.items() if v is not None}
+    if isinstance(obj, list):
+        return [_strip_none(v) for v in obj]
+    return obj
+
+
 def fingerprint(spec: LoopSpec) -> str:
     """A stable hash of the spec's *meaning* (not its YAML formatting/comments).
 
     Used to detect whether a spec changed between an original run and a resume.
+    None-valued optional fields are omitted so introducing a new optional field
+    does not invalidate the fingerprint of specs that leave it unset.
     """
-    payload = json.dumps(asdict(spec), sort_keys=True, default=str)
+    payload = json.dumps(_strip_none(asdict(spec)), sort_keys=True, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
