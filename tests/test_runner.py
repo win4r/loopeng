@@ -91,3 +91,18 @@ def test_ledger_has_run_start_iterations_and_run_end(tmp_path):
     assert "iteration" in events
     assert events[-1] == "run_end"
     assert records[-1]["status"] == "success"
+
+
+def test_failing_context_command_is_captured_and_reported(tmp_path):
+    data = {
+        "objective": "obj",
+        "prompt": "ctx={{bad}} {{feedback}}",
+        "agent": {"type": "shell", "command": [PY, "-c", "pass"]},
+        "verify": {"command": [PY, "-c", "import sys; sys.exit(0)"]},
+        "context": {"bad": [PY, "-c", "import sys; sys.stderr.write('boom'); sys.exit(3)"]},
+    }
+    result = run_loop(parse_spec(data), tmp_path)
+    iteration = [r for r in Ledger(result.ledger_path).records() if r["event"] == "iteration"][0]
+    assert "context_errors" in iteration
+    assert iteration["context_errors"][0]["name"] == "bad"
+    assert iteration["context_errors"][0]["exit"] == 3

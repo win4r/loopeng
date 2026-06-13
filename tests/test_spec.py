@@ -114,3 +114,50 @@ def test_empty_command_list_raises():
     data["agent"]["command"] = []
     with pytest.raises(SpecError):
         parse_spec(data)
+
+
+def test_timeout_seconds_alias():
+    data = valid_spec_dict()
+    data["limits"] = {"timeout_seconds": 45}
+    assert parse_spec(data).limits.command_timeout == 45
+
+
+def test_command_timeout_still_supported():
+    data = valid_spec_dict()
+    data["limits"] = {"command_timeout": 7}
+    assert parse_spec(data).limits.command_timeout == 7
+
+
+def test_blast_radius_defaults_inactive():
+    spec = parse_spec(valid_spec_dict())
+    assert spec.blast_radius.active is False
+
+
+def test_blast_radius_parsed_from_limits():
+    data = valid_spec_dict()
+    data["limits"] = {
+        "require_clean_git": True,
+        "max_changed_files": 5,
+        "allowed_paths": ["src/**"],
+        "forbidden_paths": [".env", "secrets/**"],
+    }
+    spec = parse_spec(data)
+    assert spec.blast_radius.require_clean_git is True
+    assert spec.blast_radius.max_changed_files == 5
+    assert spec.blast_radius.allowed_paths == ["src/**"]
+    assert spec.blast_radius.forbidden_paths == [".env", "secrets/**"]
+    assert spec.blast_radius.active is True
+
+
+def test_blast_radius_bad_allowed_paths_type_raises():
+    data = valid_spec_dict()
+    data["limits"] = {"allowed_paths": "src/**"}  # must be a list, not a string
+    with pytest.raises(SpecError):
+        parse_spec(data)
+
+
+def test_blast_radius_bad_max_changed_files_raises():
+    data = valid_spec_dict()
+    data["limits"] = {"max_changed_files": "ten"}
+    with pytest.raises(SpecError):
+        parse_spec(data)
