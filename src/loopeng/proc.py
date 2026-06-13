@@ -14,6 +14,7 @@ from typing import List, Optional, Sequence
 
 # Conventional exit codes for failures we synthesize (the child never returned them).
 EXIT_TIMEOUT = 124  # matches coreutils `timeout`
+EXIT_NOTEXEC = 126  # matches shell "command found but not executable"
 EXIT_NOTFOUND = 127  # matches shell "command not found"
 
 
@@ -96,5 +97,13 @@ def run_proc(
             stdout="",
             stderr=f"command not found: {exc}",
             exit_code=EXIT_NOTFOUND,
+            duration_ms=duration,
+        )
+    except PermissionError as exc:
+        duration = int((time.monotonic() - start) * 1000)
+        return ProcResult(
+            stdout="",
+            stderr=f"command not executable: {exc}",
+            exit_code=EXIT_NOTEXEC,
             duration_ms=duration,
         )

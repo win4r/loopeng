@@ -96,6 +96,7 @@ missing one just becomes a normal exit-127 failure). Check readiness without run
 ```bash
 loopeng doctor                 # uses ./loop.yaml
 loopeng doctor --json          # {"adapter_type": "...", "binary": "...", "resolved_path": "...", "ok": true/false}
+# exit: 0 ready · 7 binary missing/not-executable · 2 spec missing/invalid or adapter build error
 ```
 
 **Explicit limitation:** `claude-code` and `codex` are **CLI wrappers, not deep API

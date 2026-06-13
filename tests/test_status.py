@@ -95,6 +95,32 @@ def test_status_dir_reads_target_not_cwd(tmp_path, capsys):
     assert report["run_id"] == "rX"
 
 
+def test_status_adapter_preflight_uses_latest_record(tmp_path, monkeypatch, capsys):
+    state = tmp_path / ".loopeng"
+    state.mkdir()
+    (state / "ledger.jsonl").write_text(
+        json.dumps({"event": "adapter_preflight_passed", "adapter_type": "claude-code",
+                    "binary": "claude", "resolved_path": "/x/claude",
+                    "ts": "2026-01-01T00:00:00+00:00"}) + "\n"
+        + json.dumps({"event": "adapter_preflight_failed", "adapter_type": "claude-code",
+                      "binary": "claude", "resolved_path": None, "reason": "not found",
+                      "ts": "2026-01-02T00:00:00+00:00"}) + "\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    main(["status", "--json"])
+    report = json.loads(capsys.readouterr().out.strip())
+    assert report["adapter_preflight"]["ok"] is False  # LATEST record, not first
+    assert report["adapter_preflight"]["ts"] == "2026-01-02T00:00:00+00:00"
+
+
+def test_status_adapter_preflight_none_when_absent(tmp_path, monkeypatch, capsys):
+    _write_heartbeat(tmp_path, run_id="r1", pid=os.getpid())  # heartbeat, but no preflight record
+    monkeypatch.chdir(tmp_path)
+    main(["status", "--json"])
+    report = json.loads(capsys.readouterr().out.strip())
+    assert report["adapter_preflight"] is None
+
+
 def test_status_surfaces_adapter_preflight_failure(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     (tmp_path / "empty").mkdir()

@@ -11,8 +11,9 @@ from loopeng.cli import main
 from loopeng.errors import AdapterError
 from loopeng.heartbeat import HEARTBEAT_FILENAME, read_heartbeat
 from loopeng.ledger import Ledger
+from loopeng.resume import resolve_resume
 from loopeng.runner import run_loop
-from loopeng.spec import AgentSpec, parse_spec
+from loopeng.spec import AgentSpec, fingerprint, parse_spec
 
 PY = sys.executable or "python3"
 
@@ -87,6 +88,83 @@ def test_custom_binary_path_respected(tmp_path):
     assert pf.binary == str(fake)
     assert pf.resolved_path == str(fake)
     assert adapter.build_command("PROMPT") == [str(fake), "-p", "PROMPT"]
+
+
+def test_relative_binary_resolved_against_cwd_not_process_cwd(tmp_path):
+    # A relative-with-separator binary must resolve against the workspace (cwd),
+    # the way subprocess.run(cwd=...) launches it — not the process CWD.
+    (tmp_path / "tools").mkdir()
+    _fake_binary(tmp_path / "tools", "agent")
+    adapter = build_adapter(AgentSpec(type="claude-code", command=["tools/agent", "-p"]))
+    assert adapter.preflight(cwd=tmp_path).ok is True
+    assert adapter.preflight(cwd=tmp_path / "elsewhere").ok is False  # matches a failing exec
+
+
+def test_preflight_resolves_relative_binary_when_workspace_below_project(tmp_path):
+    # workspace is a subdir; binary is workspace-relative; process cwd is elsewhere.
+    ws = tmp_path / "ws"
+    (ws / "tools").mkdir(parents=True)
+    _fake_binary(ws / "tools", "agent")
+    spec = parse_spec(
+        {
+            "objective": "o",
+            "prompt": "{{feedback}}",
+            "workspace": "ws",
+            "agent": {"type": "claude-code", "command": ["tools/agent", "-p"]},
+            "verify": {"command": [PY, "-c", "import sys; sys.exit(0)"]},
+        }
+    )
+    result = run_loop(spec, tmp_path)  # would be preflight_failed without workspace-aware resolution
+    assert result.status == "success"
+
+
+def test_non_executable_custom_binary_reason(tmp_path):
+    not_exec = tmp_path / "claude"
+    not_exec.write_text("#!/bin/sh\n")  # exists but NOT chmod +x
+    pf = build_adapter(AgentSpec(type="claude-code", command=[str(not_exec), "-p"])).preflight()
+    assert pf.ok is False
+    assert "not executable" in pf.reason
+
+
+def test_preset_rejects_string_command():
+    with pytest.raises(AdapterError):
+        build_adapter(AgentSpec(type="claude-code", command="claude -p"))
+    with pytest.raises(AdapterError):
+        build_adapter(AgentSpec(type="codex", command="codex exec"))
+
+
+def test_resume_with_missing_binary_fails_preflight(tmp_path):
+    fake = _fake_binary(tmp_path / "bin", "claude")
+    spec = parse_spec(
+        {
+            "objective": "o",
+            "prompt": "{{feedback}}",
+            "agent": {"type": "claude-code", "command": [str(fake), "-p"]},
+            "verify": {"command": [PY, "-c", "import sys; sys.exit(1)"]},
+            "limits": {"max_iterations": 2, "max_consecutive_failures": 9},
+        }
+    )
+    r1 = run_loop(spec, tmp_path)
+    assert r1.status == "exhausted"
+
+    (tmp_path / "bin" / "claude").unlink()  # the binary disappears before the resume
+    decision = resolve_resume(tmp_path / ".loopeng" / "ledger.jsonl", fingerprint(spec))
+    assert decision.resumable
+    r2 = run_loop(spec, tmp_path, max_iterations=4, resume=decision)
+    assert r2.status == "preflight_failed"
+    assert r2.iterations == 2  # the resumed (cumulative) position, not 0
+
+    records = Ledger(r2.ledger_path).records()
+    idx_resume = max(i for i, r in enumerate(records) if r.get("event") == "resume_loaded")
+    idx_preflight = max(i for i, r in enumerate(records) if r.get("event") == "adapter_preflight_failed")
+    assert idx_preflight > idx_resume
+
+
+def test_doctor_spec_error_exit_2(tmp_path, monkeypatch, capsys):
+    (tmp_path / "loop.yaml").write_text("objective: x\n")  # missing prompt/agent/verify -> SpecError
+    monkeypatch.chdir(tmp_path)
+    assert main(["doctor", "--json"]) == 2
+    assert capsys.readouterr().out.strip() == ""  # no malformed JSON on stdout
 
 
 # --- run-loop gating ---

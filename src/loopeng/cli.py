@@ -343,7 +343,8 @@ def cmd_doctor(args) -> int:
         print(f"adapter error: {exc}", file=sys.stderr)
         return 2
 
-    pf = adapter.preflight()
+    workspace = (spec_path.resolve().parent / spec.workspace).resolve()
+    pf = adapter.preflight(cwd=workspace)
     report = {
         "adapter_type": pf.adapter_type,
         "binary": pf.binary,

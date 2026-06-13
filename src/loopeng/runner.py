@@ -105,7 +105,7 @@ def _truncate(text: str, limit: int = 800) -> str:
 
 @dataclass
 class LoopResult:
-    status: str  # "success" | "blocked" | "exhausted" | "precondition_failed"
+    status: str  # success | blocked | exhausted | precondition_failed | preflight_failed
     iterations: int
     passed: bool
     ledger_path: Path
@@ -236,7 +236,7 @@ def run_loop(
         )
 
     # --- adapter preflight (before any agent/verifier/gate work) ---
-    preflight = adapter.preflight()
+    preflight = adapter.preflight(cwd=workspace)
     if not preflight.ok:
         emit(
             ev.ADAPTER_PREFLIGHT_FAILED,

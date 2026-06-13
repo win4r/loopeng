@@ -45,6 +45,28 @@ def normalize_command(value) -> Optional[List[str]]:
     raise AdapterError(f"command must be a string or list of strings, got {value!r}")
 
 
+def _resolve_binary(binary, cwd):
+    """Resolve a binary the same way ``subprocess.run(cwd=cwd)`` resolves argv[0].
+
+    Returns ``(resolved_path_or_None, problem_or_None)``:
+      - a bare name -> PATH lookup (cwd-independent);
+      - an absolute path or a path with a separator -> checked on disk, resolving
+        a relative path against ``cwd`` (the workspace the agent runs in), so
+        preflight agrees with how the agent will actually be launched.
+    """
+    import os.path as _osp
+
+    has_sep = (os.sep in binary) or (os.altsep is not None and os.altsep in binary)
+    if _osp.isabs(binary) or has_sep:
+        candidate = binary if _osp.isabs(binary) or not cwd else _osp.join(str(cwd), binary)
+        if _osp.isfile(candidate):
+            if os.access(candidate, os.X_OK):
+                return candidate, None
+            return None, f"{binary!r} exists but is not executable (chmod +x?)"
+        return None, f"{binary!r} not found"
+    return shutil.which(binary), None
+
+
 class ShellAdapter:
     """Runs any shell-callable command as the agent. The tested, default path."""
 
@@ -82,20 +104,17 @@ class ShellAdapter:
             command = command + [prompt]
         return command
 
-    def preflight(self) -> PreflightResult:
-        """Pure readiness check: is this adapter's binary resolvable? No side effects."""
-        if not self.command:
-            return PreflightResult(False, self.name, None, None, "agent command is empty")
-        binary = self.command[0]
-        resolved = shutil.which(binary)
+    def preflight(self, cwd=None) -> PreflightResult:
+        """Pure readiness check, resolved the way the agent will be launched.
+
+        ``cwd`` is the workspace the agent runs in; a relative binary path is
+        resolved against it so preflight and execution agree. No side effects.
+        """
+        binary = self.binary
+        resolved, problem = _resolve_binary(binary, cwd)
         if self.require_binary and resolved is None:
-            return PreflightResult(
-                False,
-                self.name,
-                binary,
-                None,
-                f"{self.name} binary {binary!r} not found on PATH",
-            )
+            reason = problem or f"{self.name} binary {binary!r} not found on PATH"
+            return PreflightResult(False, self.name, binary, None, reason)
         return PreflightResult(True, self.name, binary, resolved)
 
     def run(self, prompt, *, workspace, timeout, iteration: int = 0, objective: str = "") -> ProcResult:
@@ -138,6 +157,8 @@ def _build_claude_code(agent: AgentSpec) -> ShellAdapter:
 
     NOTE: the flag mapping is best-effort; confirm flags against your installed CLI.
     """
+    if isinstance(agent.command, str):
+        raise AdapterError("the claude-code adapter requires command as a list (argv), not a string")
     command = agent.command or ["claude", "-p"]
     args = list(agent.args)
     caps = agent.capabilities
@@ -167,6 +188,8 @@ def _build_codex(agent: AgentSpec) -> ShellAdapter:
 
     NOTE: the flag mapping is best-effort; confirm flags against your installed CLI.
     """
+    if isinstance(agent.command, str):
+        raise AdapterError("the codex adapter requires command as a list (argv), not a string")
     command = agent.command or ["codex", "exec"]
     args = list(agent.args)
     caps = agent.capabilities
