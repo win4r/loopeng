@@ -25,6 +25,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from . import events as ev
 from . import git_state
 from .adapters import build_adapter, normalize_command
+from .baseline import evaluate_baseline
 from .blast_radius import evaluate_changes
 from .heartbeat import (
     HEARTBEAT_FILENAME,
@@ -466,8 +467,16 @@ def run_loop(
             timeout=spec.limits.command_timeout,
             stdin_text=prompt,
         )
-        passed = verify_result.ok
+        baseline_ok, baseline_actual, baseline_reason = True, None, ""
+        if verify_result.ok and spec.verify.baseline is not None:
+            baseline_ok, baseline_actual, baseline_reason = evaluate_baseline(
+                spec.verify.baseline, verify_result.feedback
+            )
+        passed = verify_result.ok and baseline_ok
         feedback = verify_result.feedback
+        if verify_result.ok and not baseline_ok:
+            # Exit 0 but the metric gate failed: tell the agent why, so it can self-correct.
+            feedback = (feedback + "\n" if feedback else "") + "baseline not met: " + baseline_reason
         st.consecutive_failures = 0 if passed else st.consecutive_failures + 1
 
         if passed:
@@ -502,6 +511,8 @@ def run_loop(
             record["context_errors"] = context_errors
         if gate_active:
             record["blast_radius"] = {"ok": True, "changed_paths": agent_changed}
+        if spec.verify.baseline is not None:
+            record["baseline"] = {"ok": baseline_ok, "actual": baseline_actual, "metric": spec.verify.baseline.name}
         ledger.append(record)
 
         if passed:

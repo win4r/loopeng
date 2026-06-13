@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
+from .baseline import DIRECTIONS, BaselineSpec
 from .blast_radius import BlastRadiusPolicy
 from .errors import SpecError
 
@@ -45,6 +47,7 @@ class AgentSpec:
 @dataclass
 class VerifySpec:
     command: object  # Command — the deterministic gate
+    baseline: Optional[BaselineSpec] = None  # optional numeric threshold on top of exit 0
 
 
 @dataclass
@@ -107,6 +110,26 @@ def _as_command(value, field_name: str) -> Command:
     raise SpecError(f"{field_name} must be a string or a list of strings")
 
 
+def _parse_baseline(raw) -> BaselineSpec:
+    _require(isinstance(raw, dict), "verify.baseline must be a mapping")
+    regex = raw.get("regex")
+    _require(isinstance(regex, str) and regex.strip(), "verify.baseline.regex is required (a string)")
+    try:
+        re.compile(regex)
+    except re.error as exc:
+        raise SpecError(f"verify.baseline.regex is not a valid regex: {exc}") from exc
+    direction = raw.get("direction")
+    _require(
+        direction in DIRECTIONS,
+        f"verify.baseline.direction must be one of {sorted(DIRECTIONS)}, got {direction!r}",
+    )
+    try:
+        value = float(raw.get("value"))
+    except (TypeError, ValueError) as exc:
+        raise SpecError(f"verify.baseline.value must be a number: {exc}") from exc
+    return BaselineSpec(regex=regex, direction=direction, value=value, name=str(raw.get("metric", "metric")))
+
+
 def parse_spec(data, *, source: str = "<dict>") -> LoopSpec:
     """Validate a plain dict (already-parsed YAML) into a LoopSpec."""
     _require(isinstance(data, dict), f"{source}: the top level must be a mapping")
@@ -152,11 +175,14 @@ def parse_spec(data, *, source: str = "<dict>") -> LoopSpec:
         verify_raw is not None,
         "verify is required — a deterministic gate is the load-bearing half of the loop",
     )
+    baseline = None
     if isinstance(verify_raw, dict):
         verify_command = _as_command(verify_raw.get("command"), "verify.command")
+        if verify_raw.get("baseline") is not None:
+            baseline = _parse_baseline(verify_raw["baseline"])
     else:
         verify_command = _as_command(verify_raw, "verify")
-    verify = VerifySpec(command=verify_command)
+    verify = VerifySpec(command=verify_command, baseline=baseline)
 
     workspace = data.get("workspace", ".")
     _require(
