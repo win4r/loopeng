@@ -135,6 +135,81 @@ and write through it to a location outside the repo without tripping the gate; a
 `forbidden_paths`. For real isolation, run the agent in a container, VM, or a
 dedicated sandbox.
 
+## Resume & live status
+
+A run's ledger is **resumable state**, not just an audit log. Every run has a stable
+`run_id`, and each iteration is recorded with its iteration number and consecutive-
+failure count, so an interrupted or exhausted run can be continued.
+
+```bash
+loopeng run                      # ... interrupted, or exhausts max_iterations
+loopeng run --resume             # continues the latest run from the next iteration
+loopeng run --resume --max-iterations 20   # ... with more headroom
+loopeng run --resume --force     # override a 'blocked' run or a changed spec
+```
+
+**Resume restores** the iteration counter and the consecutive-failure counter (so the
+circuit breaker accounts for failures from before the interruption) and continues
+under the **same `run_id`**.
+
+**Resume refuses (exit code `6`)** when:
+
+| Condition | Override |
+|---|---|
+| no ledger exists | — |
+| no resumable run in the ledger | — |
+| the latest run already **succeeded** | — |
+| the latest run ended **`blocked`** | `--force` |
+| the spec **fingerprint changed** since that run | `--force` |
+
+The **spec fingerprint** is a hash of the spec's *meaning* — every field of the parsed
+`loop.yaml` (objective, prompt, agent, verify, workspace, context, limits, blast-radius)
+— not its formatting/comments. Editing any of those between runs trips the mismatch
+guard so you don't resume a run against a spec it never saw; `--force` overrides it.
+(Changing the world the agent observes — files on disk, environment — does **not**
+change the fingerprint, so the normal interrupted→fix→`--resume` flow works.)
+
+**Blast-radius on resume:** the gate re-baselines against the working tree at the start
+of *each* invocation, so `max_changed_files` bounds the *resumed segment*, not the whole
+logical run cumulatively (this is deliberate — it keeps any manual fixes you make between
+runs from being attributed to the agent). `forbidden_paths`/`allowed_paths` are still
+enforced per file on every segment. `require_clean_git` applies only to a fresh run; on
+`--resume` the dirty tree is the prior segment's own output and is accepted.
+
+### Live status
+
+While (or after) a run, `.loopeng/heartbeat.json` records where it is. Query it:
+
+```bash
+loopeng status            # human summary
+loopeng status --json     # one stable JSON object (run_id, phase, iteration, stale, ...)
+loopeng status --dir path/to/project
+```
+
+The heartbeat is rewritten atomically at each phase (`starting`, `gathering_context`,
+`running_agent`, `checking_blast_radius`, `verifying`, `writing_ledger`, and a terminal
+`completed`/`blocked`/`failed`). Fields: `run_id, pid, cwd, spec_path, spec_fingerprint,
+phase, iteration, max_iterations, consecutive_failures, started_at, updated_at,
+last_event, heartbeat_schema_version`. `status` reports **`stale: true`** when the
+recorded `pid` is no longer alive — a live pid is authoritative, since the heartbeat only
+refreshes between phases and a single phase can legitimately run up to `command_timeout`.
+When no pid is recorded it falls back to an `updated_at` age threshold (30s). (Caveat: pid
+reuse can rarely make a crashed run's recycled pid read as live.)
+
+### Typed events
+
+Internally the runner emits typed event dicts (`run_started`, `iteration_started`,
+`agent_started`/`agent_completed`, `blast_radius_started`/`_passed`/`_violation`,
+`verify_started`/`_passed`/`_failed`, `iteration_failed`, `run_completed`/`_blocked`/
+`_failed`, `resume_started`/`_loaded`/`_refused`, `heartbeat_written`, …). Each carries
+`type`, `run_id`, and `ts` and is JSON-serializable, so it is ledger-compatible. The CLI
+renders them to the same human-readable output as before.
+
+### Exit codes
+
+`0` success · `2` spec/adapter error · `3` blocked · `4` exhausted ·
+`5` precondition failed (dirty tree with `require_clean_git`) · `6` resume refused.
+
 ## Not yet built (intentionally out of scope)
 
 Multi-agent orchestration, daemon mode, MCP integration, web UI, publishing.

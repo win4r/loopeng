@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
+LEDGER_SCHEMA_VERSION = 1
+
 
 def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -33,6 +35,13 @@ class Ledger:
         records = []
         for raw in self.path.read_text(encoding="utf-8").splitlines():
             raw = raw.strip()
-            if raw:
+            if not raw:
+                continue
+            try:
                 records.append(json.loads(raw))
+            except json.JSONDecodeError:
+                # A crash mid-append can leave a torn trailing line — the exact
+                # state resume must recover from. Skip unparseable lines rather
+                # than failing the whole read.
+                continue
         return records
