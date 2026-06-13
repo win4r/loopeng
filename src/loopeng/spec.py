@@ -7,7 +7,9 @@ any YAML dependency or filesystem.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import hashlib
+import json
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, List, Union
 
@@ -192,6 +194,15 @@ def parse_spec(data, *, source: str = "<dict>") -> LoopSpec:
         limits=limits,
         blast_radius=blast_radius,
     )
+
+
+def fingerprint(spec: LoopSpec) -> str:
+    """A stable hash of the spec's *meaning* (not its YAML formatting/comments).
+
+    Used to detect whether a spec changed between an original run and a resume.
+    """
+    payload = json.dumps(asdict(spec), sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 def load_spec(path) -> LoopSpec:

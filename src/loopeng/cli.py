@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import List, Optional
 
 from .errors import AdapterError, SpecError
-from .runner import run_loop
-from .spec import load_spec
+from .events import make_event
+from .heartbeat import HEARTBEAT_FILENAME, is_stale, pid_alive, read_heartbeat
+from .ledger import Ledger
+from .resume import resolve_resume
+from .runner import STATE_DIR, run_loop
+from .spec import fingerprint, load_spec
+
+_TERMINAL_PHASES = ("completed", "blocked", "failed")
 
 LOOP_YAML = """# loop.yaml — a portable Loop Engineering spec (loopeng).
 # The agent acts, a deterministic verifier gates the result, and the verifier's
@@ -141,6 +148,68 @@ def cmd_init(args) -> int:
     return 0
 
 
+def _render_event(event: dict) -> Optional[str]:
+    """Render a typed runner event as a human-readable line (or None to suppress)."""
+    kind = event.get("type")
+    if kind == "run_started":
+        suffix = " (resumed)" if event.get("resumed") else ""
+        return (
+            f"▶ loop start — objective: {event.get('objective')!r} "
+            f"(max {event.get('max_iterations')} iterations){suffix}"
+        )
+    if kind == "resume_loaded":
+        return (
+            f"↻ resumed run {event.get('run_id')} at iteration {event.get('start_iteration')} "
+            f"(consecutive_failures={event.get('consecutive_failures')})"
+        )
+    if kind == "blast_radius_skipped":
+        return (
+            "⚠ blast-radius controls are configured but the workspace is not a "
+            "git repository — skipping the write-set gate"
+        )
+    if kind == "verify_passed":
+        return f"  [iter {event.get('iteration')}] agent exit={event.get('agent_exit')} | verify PASS"
+    if kind == "verify_failed":
+        return (
+            f"  [iter {event.get('iteration')}] agent exit={event.get('agent_exit')} | "
+            f"verify FAIL | {event.get('feedback', '')}"
+        )
+    if kind == "blast_radius_violation":
+        return (
+            f"  [iter {event.get('iteration')}] agent exit={event.get('agent_exit')} | "
+            f"BLAST-RADIUS VIOLATION | {event.get('reason', '')}"
+        )
+    if kind == "run_completed":
+        return f"✓ success in {event.get('iterations')} iteration(s)"
+    if kind == "run_blocked":
+        return (
+            f"✗ blocked — {event.get('consecutive_failures')} consecutive failures "
+            f"(limit {event.get('limit')})"
+        )
+    if kind == "run_failed":
+        if event.get("status") == "precondition_failed":
+            return f"✗ precondition failed — {event.get('reason', 'working tree not clean at loop start')}"
+        return f"✗ exhausted — reached max {event.get('limit')} iterations without passing"
+    if kind == "resume_refused":
+        return f"✗ resume refused — {event.get('message') or event.get('reason')}"
+    return None
+
+
+def _printer(event: dict) -> None:
+    line = _render_event(event)
+    if line is not None:
+        print(line)
+
+
+def _refuse_resume(ledger_path, run_id: str, reason: str, message: str) -> int:
+    _printer(make_event("resume_refused", run_id, reason=reason, message=message))
+    if ledger_path.exists():
+        Ledger(ledger_path).append(
+            {"event": "resume_refused", "type": "resume_refused", "run_id": run_id, "reason": reason}
+        )
+    return 6  # resume refused
+
+
 def cmd_run(args) -> int:
     spec_path = Path(args.spec)
     try:
@@ -150,9 +219,37 @@ def cmd_run(args) -> int:
         return 2
 
     project_dir = spec_path.resolve().parent
+    ledger_path = project_dir / STATE_DIR / "ledger.jsonl"
+
+    resume_decision = None
+    if args.resume:
+        # Don't start a second process under a still-live run (same run_id).
+        heartbeat = read_heartbeat(project_dir / STATE_DIR / HEARTBEAT_FILENAME)
+        if (
+            heartbeat
+            and not is_stale(heartbeat)
+            and heartbeat.get("phase") not in _TERMINAL_PHASES
+            and not args.force
+        ):
+            return _refuse_resume(
+                ledger_path,
+                heartbeat.get("run_id", ""),
+                "run_in_progress",
+                "a run appears to be in progress (live heartbeat); pass --force to resume anyway",
+            )
+        decision = resolve_resume(ledger_path, fingerprint(spec), force=args.force)
+        if not decision.resumable:
+            return _refuse_resume(ledger_path, decision.run_id or "", decision.reason, decision.message)
+        resume_decision = decision
+
     try:
         result = run_loop(
-            spec, project_dir, max_iterations=args.max_iterations, on_event=print
+            spec,
+            project_dir,
+            max_iterations=args.max_iterations,
+            on_event=_printer,
+            resume=resume_decision,
+            spec_path=str(spec_path.resolve()),
         )
     except AdapterError as exc:
         print(f"adapter error: {exc}", file=sys.stderr)
@@ -160,12 +257,56 @@ def cmd_run(args) -> int:
 
     print(
         f"\nstatus: {result.status} | iterations: {result.iterations} "
-        f"| ledger: {result.ledger_path}"
+        f"| run: {result.run_id} | ledger: {result.ledger_path}"
     )
     # Exit codes are CI-friendly: 0 success, non-zero for every other outcome.
+    # 2 spec/adapter error, 3 blocked, 4 exhausted, 5 precondition_failed, 6 resume refused.
     return {"success": 0, "blocked": 3, "exhausted": 4, "precondition_failed": 5}.get(
         result.status, 1
     )
+
+
+def cmd_status(args) -> int:
+    state_dir = Path(args.dir) / STATE_DIR
+    heartbeat = read_heartbeat(state_dir / HEARTBEAT_FILENAME)
+    last_event = None
+    ledger_path = state_dir / "ledger.jsonl"
+    if ledger_path.exists():
+        records = Ledger(ledger_path).records()
+        last_event = records[-1] if records else None
+
+    stale = is_stale(heartbeat)
+    hb = heartbeat or {}
+    report = {
+        "heartbeat_present": heartbeat is not None,
+        "stale": stale,
+        "run_id": hb.get("run_id") or (last_event.get("run_id") if last_event else None),
+        "phase": hb.get("phase"),
+        "pid": hb.get("pid"),
+        "pid_alive": pid_alive(hb.get("pid")) if heartbeat else False,
+        "iteration": hb.get("iteration"),
+        "max_iterations": hb.get("max_iterations"),
+        "consecutive_failures": hb.get("consecutive_failures"),
+        "started_at": hb.get("started_at"),
+        "updated_at": hb.get("updated_at"),
+        "spec_path": hb.get("spec_path"),
+        "spec_fingerprint": hb.get("spec_fingerprint"),
+        "cwd": hb.get("cwd"),
+        "last_event": last_event,
+    }
+
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False))
+    elif heartbeat is None:
+        print(f"no run state found under {state_dir}")
+    else:
+        print(
+            f"run {report['run_id']}: phase={report['phase']} "
+            f"iteration={report['iteration']}/{report['max_iterations']} "
+            f"failures={report['consecutive_failures']} "
+            f"{'STALE' if stale else 'live'} (updated {report['updated_at']})"
+        )
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -193,7 +334,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="override limits.max_iterations for this run",
     )
+    run_parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="continue the latest unfinished run from the ledger",
+    )
+    run_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="with --resume: override a blocked run or a changed spec fingerprint",
+    )
     run_parser.set_defaults(func=cmd_run)
+
+    status_parser = sub.add_parser("status", help="report live run state from the heartbeat")
+    status_parser.add_argument(
+        "--dir", default=".", help="project directory containing .loopeng/ (default: .)"
+    )
+    status_parser.add_argument("--json", action="store_true", help="emit a single JSON object")
+    status_parser.set_defaults(func=cmd_status)
 
     return parser
 
