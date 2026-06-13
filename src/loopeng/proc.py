@@ -7,6 +7,8 @@ handled uniformly and turned into data the loop can reason about.
 
 from __future__ import annotations
 
+import os
+import select
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -27,6 +29,7 @@ class ProcResult:
     exit_code: int
     duration_ms: int
     timed_out: bool = False
+    stalled: bool = False  # killed for producing no output within no_output_timeout
     # Reserved for a future iteration (e.g. files changed). Intentionally unused
     # in the MVP, but part of the documented adapter contract.
     artifacts: List[str] = field(default_factory=list)
@@ -59,8 +62,18 @@ def run_proc(
     env: Optional[dict] = None,
     timeout: Optional[float] = None,
     stdin_text: Optional[str] = None,
+    no_output_timeout: Optional[float] = None,
 ) -> ProcResult:
-    """Run ``command`` and always return a ProcResult (never raises on child failure)."""
+    """Run ``command`` and always return a ProcResult (never raises on child failure).
+
+    When ``no_output_timeout`` is set, the child is killed if it produces no output
+    for that many seconds (a silent-hang guard, distinct from the overall ``timeout``).
+    """
+    if no_output_timeout:
+        return _run_with_inactivity_timeout(
+            command, cwd=cwd, env=env, timeout=timeout, stdin_text=stdin_text,
+            no_output_timeout=no_output_timeout,
+        )
     start = time.monotonic()
     try:
         completed = subprocess.run(
@@ -107,3 +120,92 @@ def run_proc(
             exit_code=EXIT_NOTEXEC,
             duration_ms=duration,
         )
+
+
+def _run_with_inactivity_timeout(
+    command, *, cwd, env, timeout, stdin_text, no_output_timeout
+) -> ProcResult:
+    """run_proc variant that also kills a child that goes silent (POSIX; uses select)."""
+    start = time.monotonic()
+    try:
+        proc = subprocess.Popen(
+            list(command),
+            cwd=str(cwd),
+            env=env,
+            stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        return ProcResult("", f"command not found: {exc}", EXIT_NOTFOUND, int((time.monotonic() - start) * 1000))
+    except PermissionError as exc:
+        return ProcResult("", f"command not executable: {exc}", EXIT_NOTEXEC, int((time.monotonic() - start) * 1000))
+
+    if stdin_text is not None:
+        try:
+            proc.stdin.write(stdin_text.encode("utf-8"))
+        except (BrokenPipeError, OSError):
+            pass
+        finally:
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+
+    buffers = {proc.stdout.fileno(): [], proc.stderr.fileno(): []}
+    streams = [proc.stdout, proc.stderr]
+    last_activity = time.monotonic()
+    killed = None  # "timeout" | "stall"
+
+    while streams:
+        now = time.monotonic()
+        waits = [no_output_timeout - (now - last_activity)]
+        if timeout is not None:
+            waits.append(timeout - (now - start))
+        ready, _, _ = select.select(streams, [], [], max(0.0, min(waits)))
+        now = time.monotonic()
+        if ready:
+            for stream in ready:
+                chunk = os.read(stream.fileno(), 65536)
+                if chunk:
+                    buffers[stream.fileno()].append(chunk)
+                    last_activity = now
+                else:
+                    streams.remove(stream)  # EOF
+        elif timeout is not None and (now - start) >= timeout:
+            killed = "timeout"
+            break
+        elif (now - last_activity) >= no_output_timeout:
+            killed = "stall"
+            break
+
+    if killed:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        for stream in list(streams):  # best-effort drain without blocking
+            if select.select([stream], [], [], 0)[0]:
+                try:
+                    chunk = os.read(stream.fileno(), 65536)
+                    if chunk:
+                        buffers[stream.fileno()].append(chunk)
+                except OSError:
+                    pass
+    else:
+        proc.wait()
+
+    duration = int((time.monotonic() - start) * 1000)
+    stdout = b"".join(buffers[proc.stdout.fileno()]).decode("utf-8", "replace")
+    stderr = b"".join(buffers[proc.stderr.fileno()]).decode("utf-8", "replace")
+    if killed == "stall":
+        note = f"STALLED: no output for {no_output_timeout}s"
+        stderr = f"{stderr}\n{note}".strip() if stderr else note
+        return ProcResult(stdout, stderr, EXIT_TIMEOUT, duration, timed_out=True, stalled=True)
+    if killed == "timeout":
+        note = f"TIMEOUT after {timeout}s"
+        stderr = f"{stderr}\n{note}".strip() if stderr else note
+        return ProcResult(stdout, stderr, EXIT_TIMEOUT, duration, timed_out=True)
+    return ProcResult(stdout, stderr, proc.returncode, duration)

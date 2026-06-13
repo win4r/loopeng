@@ -11,7 +11,7 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
 from .blast_radius import BlastRadiusPolicy
 from .errors import SpecError
@@ -28,6 +28,8 @@ class Limits:
     max_iterations: int = 10
     max_consecutive_failures: int = 3
     command_timeout: int = 120
+    no_output_timeout: Optional[int] = None  # kill a silently-hung agent after N s
+    no_progress_limit: Optional[int] = None  # stop after N identical-feedback failures
 
 
 @dataclass
@@ -170,11 +172,24 @@ def parse_spec(data, *, source: str = "<dict>") -> LoopSpec:
     _require(isinstance(limits_raw, dict), "limits must be a mapping")
     # `timeout_seconds` is the preferred key; `command_timeout` stays as an alias.
     timeout_raw = limits_raw.get("timeout_seconds", limits_raw.get("command_timeout", 120))
+    def _opt_positive_int(key: str) -> Optional[int]:
+        raw = limits_raw.get(key)
+        if raw is None:
+            return None
+        try:
+            value = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise SpecError(f"limits.{key} must be an integer: {exc}") from exc
+        _require(value >= 1, f"limits.{key} must be >= 1")
+        return value
+
     try:
         limits = Limits(
             max_iterations=int(limits_raw.get("max_iterations", 10)),
             max_consecutive_failures=int(limits_raw.get("max_consecutive_failures", 3)),
             command_timeout=int(timeout_raw),
+            no_output_timeout=_opt_positive_int("no_output_timeout"),
+            no_progress_limit=_opt_positive_int("no_progress_limit"),
         )
     except (TypeError, ValueError) as exc:
         raise SpecError(f"limits values must be integers: {exc}") from exc

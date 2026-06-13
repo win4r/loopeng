@@ -188,13 +188,15 @@ def _render_event(event: dict) -> Optional[str]:
             f"(limit {event.get('limit')})"
         )
     if kind == "run_failed":
+        if event.get("status") in ("preflight_failed", "no_progress"):
+            return None  # already surfaced by adapter_preflight_failed / no_progress_detected
         if event.get("status") == "precondition_failed":
             return f"✗ precondition failed — {event.get('reason', 'working tree not clean at loop start')}"
-        if event.get("status") == "preflight_failed":
-            return None  # already surfaced by the adapter_preflight_failed event
         return f"✗ exhausted — reached max {event.get('limit')} iterations without passing"
     if kind == "adapter_preflight_failed":
         return f"✗ adapter preflight failed — {event.get('reason')}"
+    if kind == "no_progress_detected":
+        return f"✗ no progress — {event.get('streak')} consecutive iterations with identical feedback"
     if kind == "resume_refused":
         return f"✗ resume refused — {event.get('message') or event.get('reason')}"
     return None
@@ -206,8 +208,12 @@ def _printer(event: dict) -> None:
         print(line)
 
 
-def _refuse_resume(ledger_path, run_id: str, reason: str, message: str) -> int:
-    _printer(make_event("resume_refused", run_id, reason=reason, message=message))
+def _json_printer(event: dict) -> None:
+    print(json.dumps(event, ensure_ascii=False))
+
+
+def _refuse_resume(ledger_path, run_id: str, reason: str, message: str, sink) -> int:
+    sink(make_event("resume_refused", run_id, reason=reason, message=message))
     if ledger_path.exists():
         Ledger(ledger_path).append(
             {"event": "resume_refused", "type": "resume_refused", "run_id": run_id, "reason": reason}
@@ -225,6 +231,7 @@ def cmd_run(args) -> int:
 
     project_dir = spec_path.resolve().parent
     ledger_path = project_dir / STATE_DIR / "ledger.jsonl"
+    sink = _json_printer if args.json else _printer
 
     resume_decision = None
     if args.resume:
@@ -241,10 +248,11 @@ def cmd_run(args) -> int:
                 heartbeat.get("run_id", ""),
                 "run_in_progress",
                 "a run appears to be in progress (live heartbeat); pass --force to resume anyway",
+                sink,
             )
         decision = resolve_resume(ledger_path, fingerprint(spec), force=args.force)
         if not decision.resumable:
-            return _refuse_resume(ledger_path, decision.run_id or "", decision.reason, decision.message)
+            return _refuse_resume(ledger_path, decision.run_id or "", decision.reason, decision.message, sink)
         resume_decision = decision
 
     try:
@@ -252,7 +260,7 @@ def cmd_run(args) -> int:
             spec,
             project_dir,
             max_iterations=args.max_iterations,
-            on_event=_printer,
+            on_event=sink,
             resume=resume_decision,
             spec_path=str(spec_path.resolve()),
         )
@@ -260,19 +268,21 @@ def cmd_run(args) -> int:
         print(f"adapter error: {exc}", file=sys.stderr)
         return 2
 
-    print(
-        f"\nstatus: {result.status} | iterations: {result.iterations} "
-        f"| run: {result.run_id} | ledger: {result.ledger_path}"
-    )
+    if not args.json:  # in --json mode stdout is a pure JSONL event stream
+        print(
+            f"\nstatus: {result.status} | iterations: {result.iterations} "
+            f"| run: {result.run_id} | ledger: {result.ledger_path}"
+        )
     # Exit codes are CI-friendly: 0 success, non-zero for every other outcome.
     # 2 spec/adapter error, 3 blocked, 4 exhausted, 5 precondition_failed,
-    # 6 resume refused, 7 adapter preflight failed.
+    # 6 resume refused, 7 adapter preflight failed, 8 no progress.
     return {
         "success": 0,
         "blocked": 3,
         "exhausted": 4,
         "precondition_failed": 5,
         "preflight_failed": 7,
+        "no_progress": 8,
     }.get(result.status, 1)
 
 
@@ -395,6 +405,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="with --resume: override a blocked run or a changed spec fingerprint",
+    )
+    run_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit one typed JSON event per line to stdout (machine-readable stream)",
     )
     run_parser.set_defaults(func=cmd_run)
 

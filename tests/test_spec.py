@@ -161,3 +161,31 @@ def test_blast_radius_bad_max_changed_files_raises():
     data["limits"] = {"max_changed_files": "ten"}
     with pytest.raises(SpecError):
         parse_spec(data)
+
+
+def test_stall_limits_default_none():
+    spec = parse_spec(valid_spec_dict())
+    assert spec.limits.no_output_timeout is None
+    assert spec.limits.no_progress_limit is None
+
+
+def test_stall_limits_parsed():
+    data = valid_spec_dict()
+    data["limits"] = {"no_output_timeout": 30, "no_progress_limit": 3}
+    spec = parse_spec(data)
+    assert spec.limits.no_output_timeout == 30
+    assert spec.limits.no_progress_limit == 3
+
+
+def test_no_output_timeout_must_be_positive():
+    data = valid_spec_dict()
+    data["limits"] = {"no_output_timeout": 0}
+    with pytest.raises(SpecError):
+        parse_spec(data)
+
+
+def test_no_progress_limit_must_be_positive():
+    data = valid_spec_dict()
+    data["limits"] = {"no_progress_limit": 0}
+    with pytest.raises(SpecError):
+        parse_spec(data)

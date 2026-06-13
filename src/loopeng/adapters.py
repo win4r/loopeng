@@ -117,7 +117,16 @@ class ShellAdapter:
             return PreflightResult(False, self.name, binary, None, reason)
         return PreflightResult(True, self.name, binary, resolved)
 
-    def run(self, prompt, *, workspace, timeout, iteration: int = 0, objective: str = "") -> ProcResult:
+    def run(
+        self,
+        prompt,
+        *,
+        workspace,
+        timeout,
+        iteration: int = 0,
+        objective: str = "",
+        no_output_timeout=None,
+    ) -> ProcResult:
         env = os.environ.copy()
         env.update(self.extra_env)
         env["LOOPENG_PROMPT"] = prompt
@@ -133,6 +142,7 @@ class ShellAdapter:
             env=env,
             timeout=timeout,
             stdin_text=stdin_text,
+            no_output_timeout=no_output_timeout,
         )
 
 
