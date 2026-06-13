@@ -33,13 +33,15 @@ Each iteration:
 4. Append an iteration record to `.loopeng/ledger.jsonl`.
 5. On pass → `success`. On fail → feed the verifier output back and continue.
 
-Termination is bounded three ways:
+Termination is bounded several ways (these are the primary ones; see the full
+[Exit codes](#exit-codes) list):
 
 | Outcome | Trigger | Exit code |
 |---|---|---|
 | `success` | verifier passed | 0 |
 | `blocked` | `max_consecutive_failures` consecutive fails (circuit breaker) | 3 |
 | `exhausted` | `max_iterations` reached without a pass | 4 |
+| `no_progress` | `no_progress_limit` consecutive identical-feedback fails | 8 |
 
 Per-command `command_timeout` turns a hung agent/verifier into a normal failure
 (exit `124`), so the loop can't wedge.
@@ -233,15 +235,35 @@ Internally the runner emits typed event dicts (`run_started`, `iteration_started
 `agent_started`/`agent_completed`, `blast_radius_started`/`_passed`/`_violation`,
 `verify_started`/`_passed`/`_failed`, `iteration_failed`, `run_completed`/`_blocked`/
 `_failed`, `resume_started`/`_loaded`/`_refused`, `adapter_preflight_passed`/`_failed`,
-`heartbeat_written`, …). Each carries
+`no_progress_detected`, `heartbeat_written`, …). Each carries
 `type`, `run_id`, and `ts` and is JSON-serializable, so it is ledger-compatible. The CLI
-renders them to the same human-readable output as before.
+renders them to the same human-readable output as before — or, with `--json`, streams
+them verbatim:
+
+```bash
+loopeng run --json    # one JSON event per line on stdout (no human summary); pipe to a supervisor
+```
+
+### Stall & no-progress detection
+
+Two opt-in `limits` stop a loop that is running but not making progress:
+
+```yaml
+limits:
+  no_output_timeout: 60   # kill the agent if it produces no output for 60s (a silent hang,
+                          # distinct from command_timeout); recorded as agent_stalled. POSIX-only.
+  no_progress_limit: 3    # stop with status `no_progress` (exit 8) after 3 consecutive
+                          # failing iterations whose feedback is byte-identical — the
+                          # verifier's output, or a repeated blast-radius-violation message
+                          # ("no new evidence") — tighter than the consecutive-failure breaker.
+```
 
 ### Exit codes
 
 `0` success · `2` spec/adapter error · `3` blocked · `4` exhausted ·
 `5` precondition failed (dirty tree with `require_clean_git`) · `6` resume refused ·
-`7` adapter preflight failed (configured agent binary not found).
+`7` adapter preflight failed (configured agent binary not found) ·
+`8` no progress (identical-feedback failures hit `no_progress_limit`).
 
 ## Not yet built (intentionally out of scope)
 

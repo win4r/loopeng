@@ -19,6 +19,7 @@ NO_LEDGER = "no_ledger"
 NO_RESUMABLE_RUN = "no_resumable_run"
 ALREADY_SUCCEEDED = "already_succeeded"
 BLOCKED_NOT_RESUMABLE = "blocked_not_resumable"
+NO_PROGRESS_NOT_RESUMABLE = "no_progress_not_resumable"
 FINGERPRINT_MISMATCH = "fingerprint_mismatch"
 RUN_IN_PROGRESS = "run_in_progress"
 
@@ -27,6 +28,7 @@ REFUSAL_REASONS = {
     NO_RESUMABLE_RUN: "no resumable run found in the ledger",
     ALREADY_SUCCEEDED: "the latest run already completed successfully",
     BLOCKED_NOT_RESUMABLE: "the latest run ended 'blocked'; pass --force to resume it",
+    NO_PROGRESS_NOT_RESUMABLE: "the latest run ended 'no_progress'; pass --force to resume it",
     FINGERPRINT_MISMATCH: "the spec changed since the latest run; pass --force to resume anyway",
     RUN_IN_PROGRESS: "a run appears to be in progress (live heartbeat); pass --force to resume anyway",
 }
@@ -111,8 +113,9 @@ def resolve_resume(ledger_path, current_fingerprint, *, force: bool = False) -> 
 
     if status == "success":
         return ResumeDecision(False, ALREADY_SUCCEEDED, **common)
-    if status == "blocked" and not force:
-        return ResumeDecision(False, BLOCKED_NOT_RESUMABLE, **common)
+    if status in ("blocked", "no_progress") and not force:
+        reason = BLOCKED_NOT_RESUMABLE if status == "blocked" else NO_PROGRESS_NOT_RESUMABLE
+        return ResumeDecision(False, reason, **common)
     if (
         state["fingerprint"]
         and current_fingerprint

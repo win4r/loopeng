@@ -105,7 +105,7 @@ def _truncate(text: str, limit: int = 800) -> str:
 
 @dataclass
 class LoopResult:
-    status: str  # success | blocked | exhausted | precondition_failed | preflight_failed
+    status: str  # success | blocked | exhausted | precondition_failed | preflight_failed | no_progress
     iterations: int
     passed: bool
     ledger_path: Path
@@ -173,7 +173,25 @@ def run_loop(
         started_at=started_at,
     )
 
-    st = SimpleNamespace(iteration=start_iteration, consecutive_failures=start_failures, last_event=None)
+    st = SimpleNamespace(
+        iteration=start_iteration,
+        consecutive_failures=start_failures,
+        last_event=None,
+        same_failure_streak=0,
+        last_failure_feedback=None,
+    )
+
+    def note_no_progress(current_feedback: str) -> bool:
+        """Track consecutive identical-feedback failures (no new evidence)."""
+        limit = spec.limits.no_progress_limit
+        if not limit:
+            return False
+        if current_feedback == st.last_failure_feedback:
+            st.same_failure_streak += 1
+        else:
+            st.same_failure_streak = 1
+            st.last_failure_feedback = current_feedback
+        return st.same_failure_streak >= limit
 
     def emit(event_type: str, **fields) -> dict:
         event = ev.make_event(event_type, run_id, **fields)
@@ -378,12 +396,14 @@ def run_loop(
             timeout=spec.limits.command_timeout,
             iteration=st.iteration,
             objective=spec.objective,
+            no_output_timeout=spec.limits.no_output_timeout,
         )
         emit(
             ev.AGENT_COMPLETED,
             iteration=st.iteration,
             exit_code=agent_result.exit_code,
             timed_out=agent_result.timed_out,
+            stalled=agent_result.stalled,
         )
 
         # Blast-radius gate: inspect what the agent touched BEFORE verifying.
@@ -414,6 +434,7 @@ def run_loop(
                     "agent_exit": agent_result.exit_code,
                     "agent_ms": agent_result.duration_ms,
                     "agent_timed_out": agent_result.timed_out,
+                    "agent_stalled": agent_result.stalled,
                     "result": "fail",
                     "reason": "blast_radius_violation",
                     "blast_radius": {
@@ -427,6 +448,10 @@ def run_loop(
                 if context_errors:
                     record["context_errors"] = context_errors
                 ledger.append(record)
+                if note_no_progress(feedback):
+                    status = "no_progress"
+                    emit(ev.NO_PROGRESS_DETECTED, iteration=st.iteration, streak=st.same_failure_streak)
+                    break
                 if st.consecutive_failures >= spec.limits.max_consecutive_failures:
                     status = "blocked"
                     break
@@ -465,6 +490,7 @@ def run_loop(
             "agent_exit": agent_result.exit_code,
             "agent_ms": agent_result.duration_ms,
             "agent_timed_out": agent_result.timed_out,
+            "agent_stalled": agent_result.stalled,
             "verify_exit": verify_result.exit_code,
             "verify_ms": verify_result.duration_ms,
             "verify_timed_out": verify_result.timed_out,
@@ -480,6 +506,10 @@ def run_loop(
 
         if passed:
             status = "success"
+            break
+        if note_no_progress(feedback):
+            status = "no_progress"
+            emit(ev.NO_PROGRESS_DETECTED, iteration=st.iteration, streak=st.same_failure_streak)
             break
         if st.consecutive_failures >= spec.limits.max_consecutive_failures:
             status = "blocked"
