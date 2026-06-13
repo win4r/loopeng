@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import select
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
@@ -142,15 +143,21 @@ def _run_with_inactivity_timeout(
         return ProcResult("", f"command not executable: {exc}", EXIT_NOTEXEC, int((time.monotonic() - start) * 1000))
 
     if stdin_text is not None:
-        try:
-            proc.stdin.write(stdin_text.encode("utf-8"))
-        except (BrokenPipeError, OSError):
-            pass
-        finally:
+        # Feed stdin on a daemon thread so the read loop below can drain stdout/stderr
+        # concurrently. A blocking up-front write would deadlock if the child floods a
+        # pipe before reading a >64KB stdin — and would block the timeout/stall guards.
+        def _feed_stdin() -> None:
             try:
-                proc.stdin.close()
-            except OSError:
+                proc.stdin.write(stdin_text.encode("utf-8"))
+            except (BrokenPipeError, OSError):
                 pass
+            finally:
+                try:
+                    proc.stdin.close()
+                except OSError:
+                    pass
+
+        threading.Thread(target=_feed_stdin, daemon=True).start()
 
     buffers = {proc.stdout.fileno(): [], proc.stderr.fileno(): []}
     streams = [proc.stdout, proc.stderr]

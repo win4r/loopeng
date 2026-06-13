@@ -105,7 +105,7 @@ def _truncate(text: str, limit: int = 800) -> str:
 
 @dataclass
 class LoopResult:
-    status: str  # success | blocked | exhausted | precondition_failed | preflight_failed
+    status: str  # success | blocked | exhausted | precondition_failed | preflight_failed | no_progress
     iterations: int
     passed: bool
     ledger_path: Path
@@ -434,6 +434,7 @@ def run_loop(
                     "agent_exit": agent_result.exit_code,
                     "agent_ms": agent_result.duration_ms,
                     "agent_timed_out": agent_result.timed_out,
+                    "agent_stalled": agent_result.stalled,
                     "result": "fail",
                     "reason": "blast_radius_violation",
                     "blast_radius": {

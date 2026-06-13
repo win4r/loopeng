@@ -33,13 +33,15 @@ Each iteration:
 4. Append an iteration record to `.loopeng/ledger.jsonl`.
 5. On pass → `success`. On fail → feed the verifier output back and continue.
 
-Termination is bounded three ways:
+Termination is bounded several ways (these are the primary ones; see the full
+[Exit codes](#exit-codes) list):
 
 | Outcome | Trigger | Exit code |
 |---|---|---|
 | `success` | verifier passed | 0 |
 | `blocked` | `max_consecutive_failures` consecutive fails (circuit breaker) | 3 |
 | `exhausted` | `max_iterations` reached without a pass | 4 |
+| `no_progress` | `no_progress_limit` consecutive identical-feedback fails | 8 |
 
 Per-command `command_timeout` turns a hung agent/verifier into a normal failure
 (exit `124`), so the loop can't wedge.
@@ -251,7 +253,8 @@ limits:
   no_output_timeout: 60   # kill the agent if it produces no output for 60s (a silent hang,
                           # distinct from command_timeout); recorded as agent_stalled. POSIX-only.
   no_progress_limit: 3    # stop with status `no_progress` (exit 8) after 3 consecutive
-                          # failing iterations whose verifier feedback is byte-identical
+                          # failing iterations whose feedback is byte-identical — the
+                          # verifier's output, or a repeated blast-radius-violation message
                           # ("no new evidence") — tighter than the consecutive-failure breaker.
 ```
 
