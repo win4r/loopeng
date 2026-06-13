@@ -39,6 +39,26 @@ def test_codex_preset_argv():
     assert adapter.build_command("PROMPT") == ["codex", "exec", "PROMPT"]
 
 
+def test_claude_preset_capability_flags_argv():
+    adapter = build_adapter(
+        AgentSpec(type="claude-code", capabilities={"session_id": "s1", "approval_mode": "auto"})
+    )
+    assert adapter.build_command("P") == [
+        "claude", "-p", "--session-id", "s1", "--permission-mode", "auto", "P",
+    ]
+
+
+def test_codex_preset_capability_flags_argv():
+    adapter = build_adapter(AgentSpec(type="codex", capabilities={"sandbox": "workspace-write"}))
+    assert adapter.build_command("P") == ["codex", "exec", "--sandbox", "workspace-write", "P"]
+
+
+def test_presets_require_binary_shell_does_not():
+    assert build_adapter(AgentSpec(type="claude-code")).require_binary is True
+    assert build_adapter(AgentSpec(type="codex")).require_binary is True
+    assert build_adapter(AgentSpec(type="shell", command=["true"])).require_binary is False
+
+
 def test_unknown_agent_type_raises():
     with pytest.raises(AdapterError):
         build_adapter(AgentSpec(type="nope", command=["true"]))

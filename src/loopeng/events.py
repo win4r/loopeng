@@ -33,6 +33,8 @@ RESUME_STARTED = "resume_started"
 RESUME_REFUSED = "resume_refused"
 RESUME_LOADED = "resume_loaded"
 BLAST_RADIUS_SKIPPED = "blast_radius_skipped"
+ADAPTER_PREFLIGHT_PASSED = "adapter_preflight_passed"
+ADAPTER_PREFLIGHT_FAILED = "adapter_preflight_failed"
 
 EVENT_TYPES = frozenset(
     {
@@ -58,6 +60,8 @@ EVENT_TYPES = frozenset(
         RESUME_REFUSED,
         RESUME_LOADED,
         BLAST_RADIUS_SKIPPED,
+        ADAPTER_PREFLIGHT_PASSED,
+        ADAPTER_PREFLIGHT_FAILED,
     }
 )
 

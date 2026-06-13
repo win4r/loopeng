@@ -235,6 +235,61 @@ def run_loop(
             forced=forced,
         )
 
+    # --- adapter preflight (before any agent/verifier/gate work) ---
+    preflight = adapter.preflight()
+    if not preflight.ok:
+        emit(
+            ev.ADAPTER_PREFLIGHT_FAILED,
+            adapter_type=preflight.adapter_type,
+            binary=preflight.binary,
+            reason=preflight.reason,
+        )
+        ledger.append(
+            {
+                "event": "adapter_preflight_failed",
+                "type": ev.ADAPTER_PREFLIGHT_FAILED,
+                "run_id": run_id,
+                "adapter_type": preflight.adapter_type,
+                "binary": preflight.binary,
+                "resolved_path": preflight.resolved_path,
+                "reason": preflight.reason,
+            }
+        )
+        ledger.append(
+            {
+                "event": "run_end",
+                "type": ev.RUN_FAILED,
+                "run_id": run_id,
+                "status": "preflight_failed",
+                "iterations": st.iteration,
+            }
+        )
+        emit(ev.RUN_FAILED, status="preflight_failed", reason=preflight.reason)
+        beat(PHASE_FAILED)
+        return LoopResult(
+            status="preflight_failed",
+            iterations=st.iteration,
+            passed=False,
+            ledger_path=ledger.path,
+            run_id=run_id,
+        )
+    emit(
+        ev.ADAPTER_PREFLIGHT_PASSED,
+        adapter_type=preflight.adapter_type,
+        binary=preflight.binary,
+        resolved_path=preflight.resolved_path,
+    )
+    ledger.append(
+        {
+            "event": "adapter_preflight_passed",
+            "type": ev.ADAPTER_PREFLIGHT_PASSED,
+            "run_id": run_id,
+            "adapter_type": preflight.adapter_type,
+            "binary": preflight.binary,
+            "resolved_path": preflight.resolved_path,
+        }
+    )
+
     # --- blast-radius gate setup (a repository write-set gate, NOT a sandbox) ---
     policy = spec.blast_radius
     gate_active = policy.active

@@ -14,11 +14,24 @@ the runner depends only on the ``.run()`` method, never on agent internals.
 from __future__ import annotations
 
 import os
+import shutil
+from dataclasses import dataclass
 from typing import List, Optional
 
 from .errors import AdapterError
 from .proc import ProcResult, run_proc
 from .spec import AgentSpec
+
+
+@dataclass
+class PreflightResult:
+    """Outcome of an adapter readiness check, run once before the loop begins."""
+
+    ok: bool
+    adapter_type: str
+    binary: Optional[str]
+    resolved_path: Optional[str]
+    reason: str = ""
 
 
 def normalize_command(value) -> Optional[List[str]]:
@@ -43,6 +56,7 @@ class ShellAdapter:
         env=None,
         capabilities=None,
         prompt_arg: bool = False,
+        require_binary: bool = False,
         name: str = "shell",
     ):
         self.command = normalize_command(command)
@@ -52,13 +66,37 @@ class ShellAdapter:
         self.extra_env = {str(k): str(v) for k, v in (env or {}).items()}
         self.capabilities = dict(capabilities or {})
         self.prompt_arg = prompt_arg
+        # When True (the named presets), a missing binary fails preflight up front.
+        # When False (generic shell), a missing binary is left to surface as a
+        # normal exit-127 failure during the loop (the escape-hatch contract).
+        self.require_binary = require_binary
         self.name = name
+
+    @property
+    def binary(self) -> Optional[str]:
+        return self.command[0] if self.command else None
 
     def build_command(self, prompt: str) -> List[str]:
         command = self.command + self.args
         if self.prompt_arg:
             command = command + [prompt]
         return command
+
+    def preflight(self) -> PreflightResult:
+        """Pure readiness check: is this adapter's binary resolvable? No side effects."""
+        if not self.command:
+            return PreflightResult(False, self.name, None, None, "agent command is empty")
+        binary = self.command[0]
+        resolved = shutil.which(binary)
+        if self.require_binary and resolved is None:
+            return PreflightResult(
+                False,
+                self.name,
+                binary,
+                None,
+                f"{self.name} binary {binary!r} not found on PATH",
+            )
+        return PreflightResult(True, self.name, binary, resolved)
 
     def run(self, prompt, *, workspace, timeout, iteration: int = 0, objective: str = "") -> ProcResult:
         env = os.environ.copy()
@@ -86,18 +124,19 @@ def _build_shell(agent: AgentSpec) -> ShellAdapter:
         env=agent.env,
         capabilities=agent.capabilities,
         prompt_arg=agent.prompt_arg,
+        require_binary=False,  # generic escape hatch: missing binary -> exit 127 at runtime
         name=agent.type,
     )
 
 
 def _build_claude_code(agent: AgentSpec) -> ShellAdapter:
-    """PRESET (thin): map the contract onto the Claude Code CLI headless mode.
+    """PRESET: a CLI wrapper around Claude Code's headless mode (NOT a deep API integration).
 
     Default invocation: ``claude -p "<prompt>"`` (prompt passed as an argument).
-    Override ``command:`` in loop.yaml to pin a path or flags.
+    Set ``command:`` in loop.yaml to pin a custom path or binary; the first element
+    is the binary that preflight resolves via PATH before the loop starts.
 
-    NOTE: these are best-effort defaults and are NOT validated against a live
-    ``claude`` binary in the test suite. Confirm flags against your installed CLI.
+    NOTE: the flag mapping is best-effort; confirm flags against your installed CLI.
     """
     command = agent.command or ["claude", "-p"]
     args = list(agent.args)
@@ -110,17 +149,23 @@ def _build_claude_code(agent: AgentSpec) -> ShellAdapter:
     if caps.get("approval_mode"):
         args += ["--permission-mode", str(caps["approval_mode"])]
     return ShellAdapter(
-        command, args=args, env=agent.env, capabilities=caps, prompt_arg=True, name="claude-code"
+        command,
+        args=args,
+        env=agent.env,
+        capabilities=caps,
+        prompt_arg=True,
+        require_binary=True,
+        name="claude-code",
     )
 
 
 def _build_codex(agent: AgentSpec) -> ShellAdapter:
-    """PRESET (thin): map the contract onto the Codex CLI non-interactive runner.
+    """PRESET: a CLI wrapper around the Codex CLI non-interactive runner (NOT a deep API integration).
 
-    Default invocation: ``codex exec "<prompt>"``.
+    Default invocation: ``codex exec "<prompt>"``. Set ``command:`` to pin a custom
+    path or binary; the first element is the binary preflight resolves via PATH.
 
-    NOTE: best-effort defaults, NOT validated against a live ``codex`` binary.
-    Confirm flags against your installed CLI version.
+    NOTE: the flag mapping is best-effort; confirm flags against your installed CLI.
     """
     command = agent.command or ["codex", "exec"]
     args = list(agent.args)
@@ -130,7 +175,13 @@ def _build_codex(agent: AgentSpec) -> ShellAdapter:
     if caps.get("approval_mode"):
         args += ["--ask-for-approval", str(caps["approval_mode"])]
     return ShellAdapter(
-        command, args=args, env=agent.env, capabilities=caps, prompt_arg=True, name="codex"
+        command,
+        args=args,
+        env=agent.env,
+        capabilities=caps,
+        prompt_arg=True,
+        require_binary=True,
+        name="codex",
     )
 
 

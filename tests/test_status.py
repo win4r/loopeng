@@ -95,6 +95,25 @@ def test_status_dir_reads_target_not_cwd(tmp_path, capsys):
     assert report["run_id"] == "rX"
 
 
+def test_status_surfaces_adapter_preflight_failure(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    (tmp_path / "empty").mkdir()
+    spec = parse_spec(
+        {
+            "objective": "o",
+            "prompt": "{{feedback}}",
+            "agent": {"type": "claude-code"},
+            "verify": {"command": ["true"]},
+        }
+    )
+    run_loop(spec, tmp_path)  # fails preflight (claude not on PATH)
+    monkeypatch.chdir(tmp_path)
+    main(["status", "--json"])
+    report = json.loads(capsys.readouterr().out.strip())
+    assert report["adapter_preflight"]["ok"] is False
+    assert report["adapter_preflight"]["adapter_type"] == "claude-code"
+
+
 def test_status_marks_stale_on_dead_pid(tmp_path, capsys, monkeypatch):
     _write_heartbeat(tmp_path, pid=DEAD_PID)  # fresh timestamp, dead pid
     monkeypatch.chdir(tmp_path)
