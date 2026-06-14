@@ -127,13 +127,19 @@ optional capabilities: resume / session_id / approval_mode / sandbox).
 # shell (default): run any command
 agent: { type: shell, command: ["python3", "samples/mock_agent.py"] }
 
-# Claude Code CLI wrapper (default binary `claude`, or pin a path/flags via command:)
-agent: { type: claude-code }
+# Claude Code CLI wrapper. The bare wrapper resolves `claude`, but to let the agent
+# EDIT files headless you must grant a permission mode (validated: `acceptEdits`):
+agent: { type: claude-code, capabilities: { approval_mode: acceptEdits } }
 agent: { type: claude-code, command: ["/opt/homebrew/bin/claude", "-p"] }
 
-# Codex CLI wrapper
-agent: { type: codex }
+# Codex CLI wrapper. `codex exec` is non-interactive; grant `workspace-write` so it can
+# edit files (approval_mode, if set, is applied via `-c approval_policy=<value>`):
+agent: { type: codex, capabilities: { sandbox: workspace-write } }
 ```
+
+> The bare `{ type: claude-code }` / `{ type: codex }` forms resolve and run the CLI, but
+> with the agent's default permissions they typically can't modify the workspace — grant
+> the capabilities above (or pin your own `command:` flags) for an autonomous edit loop.
 
 **Preflight.** Before the loop starts, loopeng resolves the adapter's binary. For
 `claude-code`/`codex` a missing binary **fails fast** (exit code `7`, ledger event
