@@ -4,6 +4,18 @@ All notable changes to loopeng are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions may change behavior).
 
+## [0.3.2] - 2026-06-14
+
+Small usability fix surfaced by dogfooding loopeng on a real iOS (SwiftUI) project.
+
+### Added
+- **`loopeng init` scaffolds `.loopeng/.gitignore`** (ignores everything under `.loopeng/`
+  except `skills/` and the `.gitignore` itself). Reusable project skills live under
+  `.loopeng/skills/` and are real assets worth committing, but users naturally gitignore
+  all of `.loopeng/` (the runtime ledger/heartbeat/rendered-spec state) and so were
+  silently not committing their skills. The scaffolded file commits skills while ignoring
+  runtime state, with no need to hand-edit the root `.gitignore`.
+
 ## [0.3.1] - 2026-06-14
 
 Fixes from a real-world dogfood of the v0.3.0 release assets (every platform layer

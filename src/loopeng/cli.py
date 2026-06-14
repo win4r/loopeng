@@ -131,8 +131,19 @@ sys.exit(1)
 '''
 
 
+# Scaffolded into .loopeng/ so a project commits its reusable skills (a real asset)
+# while ignoring loopeng's runtime state (ledger/heartbeat/rendered specs/stage dirs) —
+# without the user having to hand-edit their root .gitignore.
+STATE_GITIGNORE = """\
+# loopeng runtime state — ignore everything here EXCEPT committed project skills.
+*
+!.gitignore
+!skills/
+"""
+
+
 def scaffold(target_dir, force: bool = False) -> List[Path]:
-    """Create loop.yaml, the sample scripts, and the .loopeng/ state dir."""
+    """Create loop.yaml, the sample scripts, and the .loopeng/ state dir (+ its .gitignore)."""
     target = Path(target_dir)
     target.mkdir(parents=True, exist_ok=True)
     loop_path = target / "loop.yaml"
@@ -147,8 +158,10 @@ def scaffold(target_dir, force: bool = False) -> List[Path]:
     loop_path.write_text(LOOP_YAML, encoding="utf-8")
     (samples / "mock_agent.py").write_text(MOCK_AGENT, encoding="utf-8")
     (samples / "verify.py").write_text(VERIFY, encoding="utf-8")
+    state_gitignore = state / ".gitignore"
+    state_gitignore.write_text(STATE_GITIGNORE, encoding="utf-8")
 
-    return [loop_path, samples / "mock_agent.py", samples / "verify.py", state]
+    return [loop_path, samples / "mock_agent.py", samples / "verify.py", state, state_gitignore]
 
 
 def cmd_init(args) -> int:
