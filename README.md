@@ -373,6 +373,11 @@ Missing required params and unknown `--set` keys are hard errors (no silent wron
 One malformed file in a skills dir is skipped with a warning — it never breaks the others.
 The rendered spec is written to `.loopeng/skill-<name>.rendered.yaml` for transparency.
 
+Project skills under `.loopeng/skills/` are real assets worth committing, while the rest
+of `.loopeng/` is runtime state (ledger, heartbeat, rendered specs). `loopeng init`
+scaffolds a `.loopeng/.gitignore` that commits `skills/` and ignores the runtime state, so
+you don't have to hand-tune your root `.gitignore`.
+
 ### Worktree isolation (`run --isolate`)
 
 Run the loop in a throwaway **git worktree** off `HEAD` so your main working tree is

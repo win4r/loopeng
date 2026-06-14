@@ -12,6 +12,15 @@ def test_init_creates_expected_files(tmp_path):
     assert (tmp_path / ".loopeng").is_dir()
 
 
+def test_init_scaffolds_state_gitignore_that_keeps_skills(tmp_path):
+    """init writes .loopeng/.gitignore so projects commit skills but ignore runtime state."""
+    assert main(["init", "--path", str(tmp_path)]) == 0
+    gi = tmp_path / ".loopeng" / ".gitignore"
+    assert gi.exists()
+    text = gi.read_text()
+    assert "*" in text and "!skills/" in text and "!.gitignore" in text
+
+
 def test_init_refuses_overwrite_without_force(tmp_path):
     assert main(["init", "--path", str(tmp_path)]) == 0
     assert main(["init", "--path", str(tmp_path)]) == 2  # already exists
