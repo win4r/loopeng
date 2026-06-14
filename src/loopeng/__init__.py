@@ -9,4 +9,4 @@ Claude Code and Codex are *presets* layered on top of the generic shell adapter;
 the core never depends on either agent's internals.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

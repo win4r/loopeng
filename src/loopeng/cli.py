@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from . import __version__
 from .adapters import build_adapter
 from .errors import AdapterError, SpecError
 from .events import make_event
@@ -380,6 +381,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="loopeng", description="Agent-agnostic Loop Engineering runner."
     )
+    parser.add_argument("--version", action="version", version=f"loopeng {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     init_parser = sub.add_parser("init", help="scaffold a sample loop.yaml + .loopeng/")

@@ -17,6 +17,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
+loopeng --version       # loopeng 0.2.0
 loopeng init            # scaffold loop.yaml + samples/ + .loopeng/
 loopeng run             # run the sample loop (fails once, self-corrects, passes)
 cat .loopeng/ledger.jsonl
@@ -338,4 +339,4 @@ Multi-agent orchestration, daemon mode, MCP integration, web UI, publishing.
 
 ## License
 
-MIT
+[MIT](LICENSE). See the [CHANGELOG](CHANGELOG.md) for release history.
