@@ -79,3 +79,25 @@ def test_presets_require_binary_shell_does_not():
 def test_unknown_agent_type_raises():
     with pytest.raises(AdapterError):
         build_adapter(AgentSpec(type="nope", command=["true"]))
+
+
+def test_build_adapter_normalizes_builder_raise_and_nonadapter_return():
+    """A third-party plugin builder that raises at BUILD time, or returns a non-adapter,
+    must surface as a clean AdapterError (-> exit 2), not a raw traceback later."""
+    from loopeng.adapters import _BUILDERS, build_adapter
+    from loopeng.errors import AdapterError
+    from loopeng.spec import AgentSpec
+
+    def _boom(_agent):
+        raise ValueError("boom at build time")
+
+    _BUILDERS["_boom"] = _boom
+    _BUILDERS["_junk"] = lambda _agent: "not-an-adapter"
+    try:
+        with pytest.raises(AdapterError, match="builder for '_boom' failed"):
+            build_adapter(AgentSpec(type="_boom"))
+        with pytest.raises(AdapterError, match="non-adapter object"):
+            build_adapter(AgentSpec(type="_junk"))
+    finally:
+        _BUILDERS.pop("_boom", None)
+        _BUILDERS.pop("_junk", None)

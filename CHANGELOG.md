@@ -15,6 +15,8 @@ exercised end-to-end against the installed wheel/sdist by independent agents).
   the docstring always promised. `--set` values containing a newline are rejected.
 - **plugins:** an explicit `--plugin` whose `register()` raises is now a clean `PluginError`
   (exit 2), not a raw traceback; overriding an already-registered agent type emits a warning.
+  `build_adapter` also normalizes a plugin builder that raises at build time or returns a
+  non-adapter object into a clean `AdapterError` (was a raw traceback / late `AttributeError`).
 - **MCP:** `tools/call`/`initialize` with non-object `params`/`arguments` now returns
   JSON-RPC `-32602 Invalid params` instead of silently dropping the request (which hung a
   synchronous client); `serve()` always replies to a request id even on an internal error.
