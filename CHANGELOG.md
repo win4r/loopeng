@@ -39,6 +39,13 @@ Hardened the supervised MVP core into a safer, observable, steerable runner.
   exit codes (124/127/126) instead of exceptions; the spec fingerprint ignores unset
   optional fields so adding one doesn't invalidate resume.
 
+### Fixed
+- **`codex` preset `approval_mode`** — the Codex CLI removed `exec --ask-for-approval`,
+  so `capabilities: {approval_mode: …}` made the agent exit 2 (`unexpected argument`)
+  before doing any work. The approval policy is now set via the stable
+  `-c approval_policy=<value>` config override, so the preset works on current Codex CLI
+  (validated end-to-end against codex-cli 0.137.0).
+
 ## [0.1.0] - 2026-06-13
 
 ### Added

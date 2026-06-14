@@ -53,6 +53,23 @@ def test_codex_preset_capability_flags_argv():
     assert adapter.build_command("P") == ["codex", "exec", "--sandbox", "workspace-write", "P"]
 
 
+def test_codex_preset_approval_mode_uses_config_override_not_removed_flag():
+    # Regression: codex-cli removed `exec --ask-for-approval`; emitting it makes
+    # the agent exit 2 with "unexpected argument". The approval policy must be set
+    # via the stable `-c approval_policy=<value>` config override instead.
+    adapter = build_adapter(
+        AgentSpec(
+            type="codex",
+            capabilities={"sandbox": "workspace-write", "approval_mode": "never"},
+        )
+    )
+    argv = adapter.build_command("P")
+    assert argv == [
+        "codex", "exec", "--sandbox", "workspace-write", "-c", "approval_policy=never", "P",
+    ]
+    assert "--ask-for-approval" not in argv
+
+
 def test_presets_require_binary_shell_does_not():
     assert build_adapter(AgentSpec(type="claude-code")).require_binary is True
     assert build_adapter(AgentSpec(type="codex")).require_binary is True

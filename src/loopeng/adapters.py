@@ -196,7 +196,14 @@ def _build_codex(agent: AgentSpec) -> ShellAdapter:
     Default invocation: ``codex exec "<prompt>"``. Set ``command:`` to pin a custom
     path or binary; the first element is the binary preflight resolves via PATH.
 
-    NOTE: the flag mapping is best-effort; confirm flags against your installed CLI.
+    Capability flags (best-effort; confirm against your installed CLI):
+      * ``sandbox``       -> ``--sandbox <mode>`` (the autonomy control for exec;
+                            e.g. ``workspace-write`` lets the agent edit files).
+      * ``approval_mode`` -> ``-c approval_policy=<value>``. The old ``exec
+                            --ask-for-approval`` flag was removed from the Codex
+                            CLI; the approval policy is now a config key, set here
+                            via the stable ``-c key=value`` override so the preset
+                            keeps working across CLI versions.
     """
     if isinstance(agent.command, str):
         raise AdapterError("the codex adapter requires command as a list (argv), not a string")
@@ -206,7 +213,7 @@ def _build_codex(agent: AgentSpec) -> ShellAdapter:
     if caps.get("sandbox"):
         args += ["--sandbox", str(caps["sandbox"])]
     if caps.get("approval_mode"):
-        args += ["--ask-for-approval", str(caps["approval_mode"])]
+        args += ["-c", f"approval_policy={caps['approval_mode']}"]
     return ShellAdapter(
         command,
         args=args,
