@@ -37,6 +37,8 @@ SERVER_NAME = "loopeng"
 # JSON-RPC error codes we emit (a deliberate subset of the spec's reserved range).
 PARSE_ERROR = -32700
 METHOD_NOT_FOUND = -32601
+INVALID_PARAMS = -32602
+INTERNAL_ERROR = -32603
 
 # The tools/list payload. Schemas are intentionally permissive (all args optional
 # except where a tool truly needs one) so a client can call with `{}` and get a
@@ -274,11 +276,18 @@ def dispatch(message: dict, *, project_dir=".") -> Optional[dict]:
     has_id = "id" in message
     req_id = message.get("id")
     method = message.get("method")
-    params = message.get("params") or {}
+    params = message.get("params")
 
     # Notifications (no id) are processed but never answered.
     if not has_id:
         return None
+
+    # `params`, when present, must be a JSON object — we never use positional params.
+    # A non-object (list/string/number) is Invalid params, not a dropped request.
+    if params is None:
+        params = {}
+    elif not isinstance(params, dict):
+        return _error(req_id, INVALID_PARAMS, "params must be a JSON object")
 
     if method == "initialize":
         client_version = params.get("protocolVersion")
@@ -299,11 +308,16 @@ def dispatch(message: dict, *, project_dir=".") -> Optional[dict]:
         return _result(req_id, {"tools": TOOLS})
 
     if method == "tools/call":
-        call_params = params or {}
-        name = call_params.get("name")
-        arguments = call_params.get("arguments") or {}
+        name = params.get("name")
+        if not isinstance(name, str) or not name:
+            return _error(req_id, INVALID_PARAMS, "tools/call requires a string 'name'")
+        arguments = params.get("arguments")
+        if arguments is None:
+            arguments = {}
+        elif not isinstance(arguments, dict):
+            return _error(req_id, INVALID_PARAMS, "tools/call 'arguments' must be a JSON object")
         proj = arguments.get("project_dir") or project_dir
-        text, is_error = handle_call(str(name), arguments, project_dir=proj)
+        text, is_error = handle_call(name, arguments, project_dir=proj)
         return _result(
             req_id,
             {"content": [{"type": "text", "text": text}], "isError": is_error},
@@ -346,6 +360,10 @@ def serve(stdin=None, stdout=None, stderr=None, *, project_dir=".") -> None:
             response = dispatch(message, project_dir=project_dir)
         except Exception as exc:  # never let one bad message kill the loop
             print(f"loopeng-mcp: dispatch error: {exc}", file=stderr, flush=True)
+            # A request (has id) MUST get a reply or a synchronous client hangs; only
+            # a notification (no id) may be silently dropped.
+            if message.get("id") is not None:
+                _write(stdout, _error(message.get("id"), INTERNAL_ERROR, "Internal error"))
             continue
         if response is not None:
             _write(stdout, response)

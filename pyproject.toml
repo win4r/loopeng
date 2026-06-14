@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loopeng"
-version = "0.3.0"
+version = "0.3.1"
 description = "Agent-agnostic Loop Engineering runner: portable loop spec + verification gate + guardrails + auditable ledger."
 readme = "README.md"
 requires-python = ">=3.9"

@@ -109,3 +109,21 @@ def test_project_skill_shadows_bundled(tmp_path):
 def test_load_unknown_skill_lists_available(tmp_path):
     with pytest.raises(SkillError, match="unknown skill"):
         load_skill("does-not-exist", tmp_path)
+
+
+def test_malformed_skill_file_does_not_break_discovery(tmp_path, capsys):
+    """CRITICAL regression: one bad file in .loopeng/skills/ must NOT break discovery
+    of the good (and bundled) skills — it is warned-and-skipped, not fatal."""
+    sk = tmp_path / ".loopeng" / "skills"
+    sk.mkdir(parents=True)
+    (sk / "broken.yaml").write_text(":\n", encoding="utf-8")  # invalid YAML
+    (sk / "empty.yaml").write_text("", encoding="utf-8")       # 0-byte / no skill block
+    skills = discover_skills(tmp_path)  # must NOT raise
+    assert "fix-until-tests-pass" in skills and "shell-converge" in skills
+    assert "skipping malformed skill" in capsys.readouterr().err
+
+
+def test_render_rejects_newline_in_set_value():
+    skill = parse_skill(_TEMPLATE, source="test")
+    with pytest.raises(SkillError, match="single line"):
+        render_skill(skill, {"target": "a\nb"})

@@ -114,6 +114,12 @@ def watch(
     not set, the loop otherwise runs forever until interrupted), 1 when
     ``max_runs`` is reached, and 130 on SIGINT / KeyboardInterrupt (128 + SIGINT).
     """
+    if poll_interval <= 0:
+        raise ValueError("poll_interval must be > 0")
+    # max_runs < 1 means "fire zero times": the budget is already exhausted, so stop
+    # before firing even once (and before run_on_start).
+    if max_runs is not None and max_runs < 1:
+        return 1
     # A quiet window shorter than the poll cadence is unobservable; clamp it up.
     debounce_quiet = max(debounce_quiet, poll_interval)
 
@@ -174,6 +180,8 @@ def build_cron_entry(
     fields (a wrong count would otherwise shift ``cd`` into the schedule and mangle the
     command). Raises ``ValueError`` otherwise.
     """
+    if not marker.strip():
+        raise ValueError("schedule marker must be a non-empty single-line string")
     for label, value in (("marker", marker), ("workdir", workdir)):
         if any(ch in value for ch in "\r\n"):
             raise ValueError(f"schedule {label} must be a single line (no newline)")

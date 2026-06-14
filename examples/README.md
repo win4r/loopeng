@@ -14,7 +14,8 @@ Other layers need no example file:
 ```bash
 # Reusable skills (bundled):
 loopeng skill list
-loopeng run --skill fix-until-tests-pass --set test_cmd="pytest -q"
+loopeng run --skill shell-converge --set agent_cmd="echo x >> p.txt" --set verify_cmd="test -s p.txt"  # pure shell, no agent
+loopeng run --skill fix-until-tests-pass --set test_cmd="pytest -q"   # ⚠ launches a real billable claude agent that edits files
 
 # Worktree isolation (inside a git repo): run in a throwaway checkout, main tree untouched
 loopeng run --isolate

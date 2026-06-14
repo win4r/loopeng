@@ -87,7 +87,15 @@ def pid_alive(pid) -> bool:
     if pid is None:
         return False
     try:
-        os.kill(int(pid), 0)
+        pid_int = int(pid)
+    except (ValueError, TypeError):
+        return False
+    # Reject non-positive pids: os.kill(0/-1/-pgid, 0) targets a process GROUP, which
+    # would make a corrupted heartbeat (pid 0/-1) read as a live run and wrongly block resume.
+    if pid_int <= 0:
+        return False
+    try:
+        os.kill(pid_int, 0)
     except ProcessLookupError:
         return False
     except PermissionError:

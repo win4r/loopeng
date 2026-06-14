@@ -123,7 +123,7 @@ def _load_module_from_path(module_spec: str):
     return module
 
 
-def load_explicit_plugin(module_spec: str, registry: Registry) -> None:
+def load_explicit_plugin(module_spec: str, registry: Registry) -> List[str]:
     """Load a single user-named plugin and run its ``register(registry)``. STRICT.
 
     ``module_spec`` is either a filesystem path (contains ``os.sep`` or ends in
@@ -131,12 +131,13 @@ def load_explicit_plugin(module_spec: str, registry: Registry) -> None:
     dotted module name loaded via ``importlib.import_module``. Because the user
     explicitly asked for this plugin, anything wrong with it is a hard error:
 
-      * the module can't be imported  -> :class:`PluginError`
+      * the module can't be imported            -> :class:`PluginError`
       * the module has no callable ``register`` -> :class:`PluginError`
+      * ``register(registry)`` itself raises    -> :class:`PluginError`
 
-    Mutates ``registry`` in place. A plugin that rebinds an existing agent type is
-    allowed (no error here); use :func:`load_entry_point_plugins` semantics or
-    inspect the registry yourself if you need to detect that for explicit loads.
+    Mutates ``registry`` in place and returns a list of warning strings — non-empty
+    only when the plugin rebound an already-registered agent type (built-in or
+    earlier plugin), so an override of e.g. ``shell`` is visible rather than silent.
     """
     is_path = (os.sep in module_spec) or (
         os.altsep is not None and os.altsep in module_spec
@@ -157,7 +158,15 @@ def load_explicit_plugin(module_spec: str, registry: Registry) -> None:
         raise PluginError(
             f"plugin {module_spec!r} has no callable module-level register(registry)"
         )
-    register(registry)
+    before = dict(registry)
+    try:
+        register(registry)
+    except Exception as exc:  # noqa: BLE001 - the user named it: a typed error (exit 2), not a raw traceback
+        raise PluginError(f"plugin {module_spec!r} failed in register(): {exc}") from exc
+    return [
+        f"--plugin {module_spec!r}: overwrote already-registered agent type {key!r}"
+        for key in _rebound_keys(before, registry)
+    ]
 
 
 def load_plugins(
@@ -176,5 +185,5 @@ def load_plugins(
     if use_entry_points:
         warnings.extend(load_entry_point_plugins(registry))
     for module_spec in explicit or []:
-        load_explicit_plugin(module_spec, registry)
+        warnings.extend(load_explicit_plugin(module_spec, registry))
     return warnings

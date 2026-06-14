@@ -18,6 +18,7 @@ so a project can shadow a bundled skill by reusing its name.
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -110,8 +111,12 @@ def _iter_dir_skills(directory: Path, source: str) -> Dict[str, Skill]:
         try:
             skill = parse_skill(path.read_text(encoding="utf-8"), source=source)
         except (SkillError, OSError, UnicodeDecodeError) as exc:
-            # A malformed skill file shouldn't kill discovery of the good ones.
-            raise SkillError(f"could not load skill {path}: {exc}") from exc
+            # Failure-isolated: one malformed skill file must NOT break discovery of
+            # the good skills (including the bundled ones). Warn and skip it. A hard
+            # error is reserved for when the user targets the broken skill by name
+            # (load_skill raises "unknown skill" since it never made it into the map).
+            print(f"loopeng: skipping malformed skill {path}: {exc}", file=sys.stderr)
+            continue
         found[skill.name] = skill
     return found
 
@@ -197,6 +202,15 @@ def render_skill(skill: Skill, values: Dict[str, str]) -> str:
         raise SkillError(
             f"skill {skill.name!r}: missing required parameter(s): {', '.join(sorted(missing))}"
         )
+
+    # Values are spliced as text into the YAML template, so a newline would inject
+    # extra YAML lines (or silently fold into a multi-line scalar). Reject it; other
+    # YAML-breaking characters are caught loudly when the rendered text is re-parsed.
+    for pname, value in resolved.items():
+        if any(ch in value for ch in "\r\n"):
+            raise SkillError(
+                f"skill {skill.name!r}: parameter {pname!r} must be a single line (no newline)"
+            )
 
     def _replace(match: "re.Match") -> str:
         key = match.group(1)

@@ -17,7 +17,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
-loopeng --version       # loopeng 0.2.0
+loopeng --version       # prints the installed version (e.g. loopeng 0.3.1)
 loopeng init            # scaffold loop.yaml + samples/ + .loopeng/
 loopeng run             # run the sample loop (fails once, self-corrects, passes)
 cat .loopeng/ledger.jsonl
@@ -356,11 +356,21 @@ The renderer substitutes only your declared `{{param}}`s and leaves `{{feedback}
 ```bash
 loopeng skill list                 # bundled + ~/.loopeng/skills/ + ./.loopeng/skills/
 loopeng skill show fix-until-tests-pass
+
+# No-agent demo (pure shell, nothing billable):
+loopeng run --skill shell-converge --set agent_cmd="echo x >> p.txt" --set verify_cmd="test -s p.txt"
+
+# Real coding agent (⚠ launches a live, billable claude/codex run that edits files):
 loopeng run --skill fix-until-tests-pass --set test_cmd="pytest -q"
 ```
 
+> ⚠ `fix-until-tests-pass` defaults to a real `claude-code` agent: running it launches
+> an autonomous, billable agent that edits your files (up to its iteration cap). Use
+> `--isolate` to keep it in a throwaway worktree, or `shell-converge` for a dry, local demo.
+
 Discovery precedence: project `.loopeng/skills/` > user `~/.loopeng/skills/` > bundled.
 Missing required params and unknown `--set` keys are hard errors (no silent wrong loop).
+One malformed file in a skills dir is skipped with a warning — it never breaks the others.
 The rendered spec is written to `.loopeng/skill-<name>.rendered.yaml` for transparency.
 
 ### Worktree isolation (`run --isolate`)
@@ -387,8 +397,10 @@ loopeng schedule --cron "*/30 * * * *" --marker nightly --apply   # install into
 
 `watch` is a **foreground** process (no daemon): it polls file mtimes, debounces edit
 bursts, ignores `.loopeng/`/`.git/`/`__pycache__`/`.venv` to avoid self-triggering, and
-exits on Ctrl-C. `schedule` only **prints** a crontab line unless you pass `--apply`,
-which upserts a single idempotent line (keyed by `--marker`) into your own user crontab.
+exits on Ctrl-C. Without `--apply`, `schedule` is a pure **dry-run**: it reads your
+current crontab and **prints the merged result** (your existing entries plus the new
+`# loopeng:<marker>` line) to stdout — it does not write anything. Only `--apply` upserts
+that single idempotent line (keyed by `--marker`) into your own user crontab.
 
 ### Multi-stage orchestration (`orchestrate plan.yaml`)
 

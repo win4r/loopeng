@@ -326,3 +326,54 @@ def test_cli_schedule_install_failure_is_exit_2(tmp_path, monkeypatch, capsys):
     rc = main(["schedule", "--cron", "*/30 * * * *", "--marker", "ci", "--apply", "--spec", str(tmp_path / "loop.yaml")])
     assert rc == 2
     assert "schedule error" in capsys.readouterr().err
+
+
+def test_cli_set_without_skill_errors(tmp_path, capsys):
+    (tmp_path / "loop.yaml").write_text(
+        "objective: o\nagent: {type: shell, command: ['true']}\nprompt: go\n"
+        "verify: {command: ['true']}\nlimits: {max_iterations: 1}\n", encoding="utf-8")
+    assert main(["run", "--spec", str(tmp_path / "loop.yaml"), "--set", "k=v"]) == 2
+    assert "--set is only valid with --skill" in capsys.readouterr().err
+
+
+def test_cli_hooks_run_in_workspace_not_spec_dir(tmp_path):
+    """A relative-path hook resolves against the loop's workspace (where agent/verify
+    run), not the spec-file directory."""
+    ws = tmp_path / "work"
+    ws.mkdir()
+    (tmp_path / "loop.yaml").write_text(
+        "objective: o\nworkspace: work\nagent: {type: shell, command: ['true']}\n"
+        "prompt: go\nverify: {command: ['true']}\nlimits: {max_iterations: 1}\n"
+        "hooks: {on_success: ['echo hi > hookout.txt']}\n", encoding="utf-8")
+    assert main(["run", "--spec", str(tmp_path / "loop.yaml")]) == 0
+    assert (ws / "hookout.txt").exists()           # ran in the workspace
+    assert not (tmp_path / "hookout.txt").exists()  # NOT in the spec dir
+
+
+def test_cli_schedule_malformed_cron_is_exit_2(tmp_path, capsys, monkeypatch):
+    import loopeng.triggers as triggers
+    monkeypatch.setattr(triggers, "current_crontab", lambda: "")
+    monkeypatch.setattr(triggers, "install_crontab", lambda t: (_ for _ in ()).throw(AssertionError("must not install")))
+    (tmp_path / "loop.yaml").write_text(
+        "objective: o\nagent: {type: shell, command: ['true']}\nprompt: go\n"
+        "verify: {command: ['true']}\nlimits: {max_iterations: 1}\n", encoding="utf-8")
+    assert main(["schedule", "--cron", "bad cron", "--marker", "m", "--spec", str(tmp_path / "loop.yaml")]) == 2
+    assert "schedule error" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(not HAS_GIT, reason="git not available")
+def test_cli_isolate_refuses_escaping_workspace(tmp_path, capsys):
+    """--isolate must refuse a workspace that resolves outside the worktree (else it
+    silently mutates the real tree while reporting 'changed nothing')."""
+    _git_repo(tmp_path)
+    (tmp_path / "loop.yaml").write_text(
+        "objective: o\nworkspace: /tmp\nagent: {type: shell, command: ['true']}\n"
+        "prompt: go\nverify: {command: ['true']}\nlimits: {max_iterations: 1}\n", encoding="utf-8")
+    _git(["add", "-A"], tmp_path)
+    _git(["commit", "-qm", "loop"], tmp_path)
+    assert main(["run", "--isolate", "--spec", str(tmp_path / "loop.yaml")]) == 2
+    assert "cannot honor workspace" in capsys.readouterr().err
+    # and it cleaned up the worktree it briefly created
+    import subprocess
+    wt = subprocess.run(["git", "worktree", "list"], cwd=tmp_path, capture_output=True, text=True).stdout
+    assert "loopeng-wt-" not in wt
