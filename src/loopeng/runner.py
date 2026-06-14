@@ -113,12 +113,20 @@ class LoopResult:
     run_id: str = ""
 
 
-def _gather_context(context, workspace, timeout) -> Tuple[Dict[str, str], List[dict]]:
+def _gather_context(
+    context, workspace, timeout, *, max_chars=None, cache_store=None
+) -> Tuple[Dict[str, str], List[dict]]:
     values: Dict[str, str] = {}
     errors: List[dict] = []
-    for name, command in context.items():
-        result = run_proc(normalize_command(command), cwd=workspace, timeout=timeout)
-        values[name] = result.stdout.strip()
+    for name, cspec in context.items():
+        if cspec.cache and cache_store is not None and name in cache_store:
+            values[name] = cache_store[name]  # cached once; reuse for the whole run
+            continue
+        result = run_proc(normalize_command(cspec.command), cwd=workspace, timeout=timeout)
+        value = result.stdout.strip()
+        if max_chars is not None and len(value) > max_chars:
+            value = value[:max_chars] + f"... [+{len(value) - max_chars} chars truncated]"
+        values[name] = value
         if not result.ok:
             errors.append(
                 {
@@ -128,6 +136,8 @@ def _gather_context(context, workspace, timeout) -> Tuple[Dict[str, str], List[d
                     "stderr": _truncate(result.stderr, 200),
                 }
             )
+        elif cspec.cache and cache_store is not None:
+            cache_store[name] = value  # cache only successful output, so failures retry
     return values, errors
 
 
@@ -363,6 +373,7 @@ def run_loop(
 
     feedback = ""
     status = "exhausted"
+    context_cache: dict = {}  # persists cached-once context outputs across iterations
 
     while st.iteration < limit:
         st.iteration += 1
@@ -372,7 +383,11 @@ def run_loop(
         if spec.context:
             emit(ev.CONTEXT_STARTED, iteration=st.iteration)
         context_values, context_errors = _gather_context(
-            spec.context, workspace, spec.limits.command_timeout
+            spec.context,
+            workspace,
+            spec.limits.command_timeout,
+            max_chars=spec.limits.context_max_chars,
+            cache_store=context_cache,
         )
         if context_errors:
             emit(ev.CONTEXT_FAILED, iteration=st.iteration, errors=context_errors)

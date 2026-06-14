@@ -33,6 +33,7 @@ class Limits:
     command_timeout: int = 120
     no_output_timeout: Optional[int] = None  # kill a silently-hung agent after N s
     no_progress_limit: Optional[int] = None  # stop after N identical-feedback failures
+    context_max_chars: Optional[int] = None  # truncate each context output before substitution
 
 
 @dataclass
@@ -49,6 +50,12 @@ class AgentSpec:
 class VerifySpec:
     command: object  # Command — the deterministic gate
     baseline: Optional[BaselineSpec] = None  # optional numeric threshold on top of exit 0
+
+
+@dataclass
+class ContextSpec:
+    command: object  # Command run to produce a {{name}} value
+    cache: bool = False  # run once and reuse for the whole run (vs every iteration)
 
 
 @dataclass
@@ -194,7 +201,16 @@ def parse_spec(data, *, source: str = "<dict>") -> LoopSpec:
 
     context_raw = data.get("context", {}) or {}
     _require(isinstance(context_raw, dict), "context must be a mapping of name -> command")
-    context = {str(name): _as_command(cmd, f"context.{name}") for name, cmd in context_raw.items()}
+    context = {}
+    for name, raw_cmd in context_raw.items():
+        key = str(name)
+        if isinstance(raw_cmd, dict):
+            context[key] = ContextSpec(
+                command=_as_command(raw_cmd.get("command"), f"context.{name}.command"),
+                cache=bool(raw_cmd.get("cache", False)),
+            )
+        else:
+            context[key] = ContextSpec(command=_as_command(raw_cmd, f"context.{name}"))
 
     limits_raw = data.get("limits", {}) or {}
     _require(isinstance(limits_raw, dict), "limits must be a mapping")
@@ -218,6 +234,7 @@ def parse_spec(data, *, source: str = "<dict>") -> LoopSpec:
             command_timeout=int(timeout_raw),
             no_output_timeout=_opt_positive_int("no_output_timeout"),
             no_progress_limit=_opt_positive_int("no_progress_limit"),
+            context_max_chars=_opt_positive_int("context_max_chars"),
         )
     except (TypeError, ValueError) as exc:
         raise SpecError(f"limits values must be integers: {exc}") from exc

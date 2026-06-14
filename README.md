@@ -86,6 +86,23 @@ verify:
 The baseline is only consulted when the verifier exits 0 (a non-zero exit already fails
 the iteration). A missing, non-numeric, or non-finite (`inf`/`nan`) metric **fails** the gate.
 
+### Context (just-in-time inputs)
+
+`context` runs commands each iteration and substitutes their stdout into the prompt as
+`{{name}}`. Two `limits`/per-entry controls keep it disciplined:
+
+```yaml
+context:
+  diff: "git diff --stat"                 # re-run every iteration (default)
+  layout: { command: "ls -R src", cache: true }   # run ONCE and reuse for the whole run
+limits:
+  context_max_chars: 4000                 # truncate each context output before substitution
+```
+
+`cache: true` runs the command only on the first iteration that needs it and reuses the
+output (a failed command is not cached, so it retries); `context_max_chars` caps each
+substituted value so the prompt can't grow unbounded.
+
 **Regex tips** (the metric string is yours to control): `re.search` returns the *first*
 match, so anchor the pattern to the line you mean (e.g. `TOTAL.* ([0-9.]+)%`); include a
 leading `-?` if the metric can be negative; and broaden the character class (e.g.
