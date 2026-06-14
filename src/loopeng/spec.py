@@ -33,6 +33,7 @@ class Limits:
     command_timeout: int = 120
     no_output_timeout: Optional[int] = None  # kill a silently-hung agent after N s
     no_progress_limit: Optional[int] = None  # stop after N identical-feedback failures
+    context_max_chars: Optional[int] = None  # truncate each context output before substitution
 
 
 @dataclass
@@ -49,6 +50,12 @@ class AgentSpec:
 class VerifySpec:
     command: object  # Command — the deterministic gate
     baseline: Optional[BaselineSpec] = None  # optional numeric threshold on top of exit 0
+
+
+@dataclass
+class ContextSpec:
+    command: object  # Command run to produce a {{name}} value
+    cache: bool = False  # run once and reuse for the whole run (vs every iteration)
 
 
 @dataclass
@@ -194,7 +201,16 @@ def parse_spec(data, *, source: str = "<dict>") -> LoopSpec:
 
     context_raw = data.get("context", {}) or {}
     _require(isinstance(context_raw, dict), "context must be a mapping of name -> command")
-    context = {str(name): _as_command(cmd, f"context.{name}") for name, cmd in context_raw.items()}
+    context = {}
+    for name, raw_cmd in context_raw.items():
+        key = str(name)
+        if isinstance(raw_cmd, dict):
+            context[key] = ContextSpec(
+                command=_as_command(raw_cmd.get("command"), f"context.{name}.command"),
+                cache=bool(raw_cmd.get("cache", False)),
+            )
+        else:
+            context[key] = ContextSpec(command=_as_command(raw_cmd, f"context.{name}"))
 
     limits_raw = data.get("limits", {}) or {}
     _require(isinstance(limits_raw, dict), "limits must be a mapping")
@@ -218,6 +234,7 @@ def parse_spec(data, *, source: str = "<dict>") -> LoopSpec:
             command_timeout=int(timeout_raw),
             no_output_timeout=_opt_positive_int("no_output_timeout"),
             no_progress_limit=_opt_positive_int("no_progress_limit"),
+            context_max_chars=_opt_positive_int("context_max_chars"),
         )
     except (TypeError, ValueError) as exc:
         raise SpecError(f"limits values must be integers: {exc}") from exc
@@ -253,11 +270,19 @@ def fingerprint(spec: LoopSpec) -> str:
     """A stable hash of the spec's *meaning* (not its YAML formatting/comments).
 
     Used to detect whether a spec changed between an original run and a resume.
-    None-valued optional fields are omitted so introducing a new optional field
-    does not invalidate the fingerprint of specs that leave it unset.
+    None-valued optional fields are omitted, and a non-cached context entry collapses
+    to its bare command, so introducing an optional field or wrapping context in a
+    ContextSpec does not invalidate the fingerprint of specs that don't use the feature.
     """
-    payload = json.dumps(_strip_none(asdict(spec)), sort_keys=True, default=str)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    payload = asdict(spec)
+    # A cache-off context entry is semantically just its command; only cache:true differs.
+    context = payload.get("context") or {}
+    payload["context"] = {
+        name: (entry["command"] if not entry.get("cache") else entry)
+        for name, entry in context.items()
+    }
+    canonical = json.dumps(_strip_none(payload), sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 def load_spec(path) -> LoopSpec:
