@@ -41,7 +41,7 @@ from .heartbeat import (
     HeartbeatWriter,
 )
 from .ledger import LEDGER_SCHEMA_VERSION, Ledger
-from .errors import AdapterError, SpecError
+from .errors import SpecError
 from .proc import run_proc
 from .spec import LoopSpec, load_spec
 from .spec import fingerprint as spec_fingerprint
@@ -387,7 +387,9 @@ def run_loop(
         if reload_spec_path:
             try:
                 reloaded = load_spec(reload_spec_path)
-            except (SpecError, AdapterError) as exc:
+            except (SpecError, OSError, UnicodeDecodeError) as exc:
+                # load_spec already maps read/decode errors to SpecError; the extra
+                # classes are defensive so a mid-edit race can never crash the loop.
                 emit(ev.SPEC_RELOAD_FAILED, iteration=st.iteration, reason=str(exc))
             else:
                 if reloaded.prompt != active_prompt:

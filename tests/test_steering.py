@@ -16,13 +16,13 @@ CAPTURE = [
 ]
 
 
-def _yaml(prompt, agent_cmd, verify_cmd):
+def _yaml(prompt, agent_cmd, verify_cmd, max_iter=3):
     return (
         "objective: o\n"
         f"prompt: {json.dumps(prompt)}\n"
         f"agent: {{type: shell, command: {json.dumps(agent_cmd)}}}\n"
         f"verify: {{command: {json.dumps(verify_cmd)}}}\n"
-        "limits: {max_iterations: 3, max_consecutive_failures: 9}\n"
+        f"limits: {{max_iterations: {max_iter}, max_consecutive_failures: 9}}\n"
     )
 
 
@@ -62,7 +62,60 @@ def test_invalid_mid_edit_keeps_current_prompt(tmp_path):
     events = []
     run_loop(load_spec(loop), tmp_path, reload_spec_path=str(loop), on_event=events.append)
     assert all(line.startswith("ORIGINAL") for line in _seen(tmp_path))  # invalid reload ignored
+    failures = [e for e in events if e["type"] == "spec_reload_failed"]
+    assert failures and isinstance(failures[0]["reason"], str) and failures[0]["reason"]
+    assert isinstance(failures[0]["iteration"], int) and failures[0]["iteration"] >= 1
+
+
+def test_binary_mid_edit_does_not_crash(tmp_path):
+    # A partial/binary write (invalid UTF-8) must degrade to spec_reload_failed, not crash.
+    loop = tmp_path / "loop.yaml"
+    loop.write_text(_yaml("ORIGINAL {{feedback}}", CAPTURE, ["sh", "-lc", "printf '\\377\\376bad' > loop.yaml; exit 1"]))
+    events = []
+    result = run_loop(load_spec(loop), tmp_path, reload_spec_path=str(loop), on_event=events.append)
+    assert result.iterations == 3  # ran to completion, no uncaught UnicodeDecodeError
+    assert all(line.startswith("ORIGINAL") for line in _seen(tmp_path))
     assert any(e["type"] == "spec_reload_failed" for e in events)
+
+
+def test_deleted_spec_mid_run_does_not_crash(tmp_path):
+    loop = tmp_path / "loop.yaml"
+    loop.write_text(_yaml("ORIGINAL {{feedback}}", CAPTURE, ["sh", "-lc", "rm -f loop.yaml; exit 1"]))
+    events = []
+    result = run_loop(load_spec(loop), tmp_path, reload_spec_path=str(loop), on_event=events.append)
+    assert result.iterations == 3  # the in-memory spec keeps running; reload just fails
+    assert all(line.startswith("ORIGINAL") for line in _seen(tmp_path))
+    assert any(e["type"] == "spec_reload_failed" for e in events)
+
+
+def test_reload_without_change_does_not_steer(tmp_path):
+    loop = tmp_path / "loop.yaml"
+    loop.write_text(_yaml("ORIGINAL {{feedback}}", CAPTURE, ["sh", "-lc", "exit 1"]))  # never edits the file
+    events = []
+    run_loop(load_spec(loop), tmp_path, reload_spec_path=str(loop), on_event=events.append)
+    assert not any(e["type"] == "prompt_steered" for e in events)  # no spurious steer
+    assert all(line.startswith("ORIGINAL") for line in _seen(tmp_path))
+
+
+def test_reload_ignores_non_prompt_fields(tmp_path):
+    # A reloaded spec that bumps max_iterations (prompt UNCHANGED) must NOT take effect:
+    # only the prompt is hot-reloaded; limits are frozen at run start.
+    (tmp_path / "steered.yaml").write_text(
+        _yaml("ORIGINAL {{feedback}}", CAPTURE, ["sh", "-lc", "exit 1"], max_iter=5)
+    )
+    loop = tmp_path / "loop.yaml"
+    loop.write_text(
+        _yaml("ORIGINAL {{feedback}}", CAPTURE, ["sh", "-lc", "cp steered.yaml loop.yaml; exit 1"], max_iter=3)
+    )
+    result = run_loop(load_spec(loop), tmp_path, reload_spec_path=str(loop))
+    assert result.iterations == 3  # original max_iterations honored; the reloaded 5 is ignored
+
+
+def test_render_event_steering_branches():
+    from loopeng.cli import _render_event
+
+    assert "steer" in _render_event({"type": "prompt_steered", "iteration": 2}).lower()
+    assert "reload" in _render_event({"type": "spec_reload_failed", "iteration": 2, "reason": "bad"}).lower()
 
 
 def test_cli_run_reload_spec_flag(tmp_path, monkeypatch):

@@ -296,7 +296,13 @@ def load_spec(path) -> LoopSpec:
             "PyYAML is required to parse loop.yaml — install it with `pip install pyyaml`"
         ) from exc
     try:
-        data = yaml.safe_load(spec_path.read_text(encoding="utf-8"))
+        # OSError (e.g. a TOCTOU rename/unlink after exists()) and UnicodeDecodeError (a
+        # partial/binary mid-edit) become SpecError so callers can treat them uniformly.
+        text = spec_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SpecError(f"could not read {spec_path}: {exc}") from exc
+    try:
+        data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         raise SpecError(f"invalid YAML in {spec_path}: {exc}") from exc
     return parse_spec(data, source=str(spec_path))
