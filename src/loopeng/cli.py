@@ -1,16 +1,30 @@
-"""The ``loopeng`` command-line interface: ``init`` and ``run``."""
+"""The ``loopeng`` command-line interface.
+
+Subcommands: ``init``, ``run`` (with ``--skill`` / ``--isolate`` / ``--plugin``),
+``status``, ``doctor``, ``skill`` (list/show), ``watch``, ``schedule``,
+``orchestrate``, and ``mcp`` (stdio MCP server).
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
 
 from . import __version__
-from .adapters import build_adapter
-from .errors import AdapterError, SpecError
+from .adapters import _BUILDERS, build_adapter
+from .errors import (
+    AdapterError,
+    LoopengError,
+    OrchestrationError,
+    PluginError,
+    SkillError,
+    SpecError,
+    WorktreeError,
+)
 from .events import make_event
 from .heartbeat import HEARTBEAT_FILENAME, is_stale, pid_alive, read_heartbeat
 from .ledger import Ledger
@@ -204,6 +218,14 @@ def _render_event(event: dict) -> Optional[str]:
         return f"⚠ spec reload ignored (invalid mid-edit): {event.get('reason')}"
     if kind == "resume_refused":
         return f"✗ resume refused — {event.get('message') or event.get('reason')}"
+    # Hook failures are observational (they never change the loop outcome) but the
+    # user needs to see a connector that silently broke. These carry different fields.
+    if kind == "hook_failed":
+        return f"⚠ hook {event.get('hook')} failed (exit {event.get('exit_code')}): {event.get('command')}"
+    if kind == "hook_timed_out":
+        return f"⚠ hook {event.get('hook')} timed out: {event.get('command')}"
+    if kind == "hook_error":
+        return f"⚠ hook {event.get('hook')} error ({event.get('error')}): {event.get('command')}"
     return None
 
 
@@ -226,17 +248,109 @@ def _refuse_resume(ledger_path, run_id: str, reason: str, message: str, sink) ->
     return 6  # resume refused
 
 
-def cmd_run(args) -> int:
-    spec_path = Path(args.spec)
+def _safe_segment(value: str) -> str:
+    return "".join(ch if (ch.isalnum() or ch in "-_.") else "_" for ch in value)
+
+
+def _load_plugins(args) -> Optional[int]:
+    """Register entry-point + explicit ``--plugin`` adapters into the registry.
+
+    Entry-point plugins are failure-isolated (a broken one is a stderr warning);
+    an explicit ``--plugin`` that fails to import is a hard error (exit 2) because
+    the user asked for it by name. Returns an exit code on a strict failure, else None.
+    """
+    from .plugins import load_entry_point_plugins, load_explicit_plugin
+
+    for warning in load_entry_point_plugins(_BUILDERS):
+        print(f"plugin warning: {warning}", file=sys.stderr)
+    for module_spec in (getattr(args, "plugin", None) or []):
+        try:
+            load_explicit_plugin(module_spec, _BUILDERS)
+        except PluginError as exc:
+            print(f"plugin error: {exc}", file=sys.stderr)
+            return 2
+    return None
+
+
+def _spec_from_skill(args):
+    """Render a skill to a (spec, project_dir, spec_path), persisting the render."""
+    from .skills import load_skill, parse_set_args, render_to_spec
+
+    project_dir = Path(args.dir).resolve() if getattr(args, "dir", None) else Path.cwd()
+    skill = load_skill(args.skill, project_dir)
+    values = parse_set_args(getattr(args, "set", None))
+    spec, rendered = render_to_spec(skill, values)
+    state = project_dir / STATE_DIR
+    state.mkdir(parents=True, exist_ok=True)
+    spec_path = (state / f"skill-{_safe_segment(args.skill)}.rendered.yaml").resolve()
+    spec_path.write_text(rendered, encoding="utf-8")
+    return spec, project_dir, spec_path
+
+
+def _finalize_worktree(handle, result, spec, *, json_mode: bool) -> None:
+    """Commit the isolated worktree's edits onto its branch, surface the diff, clean up."""
+    from .worktree import commit_all, remove_worktree, surface_diff
+
+    root, wt_path, branch = handle
+    passed = bool(result is not None and result.passed)
+    kept = False
+    diff = ""
     try:
-        spec = load_spec(spec_path)
-    except (SpecError, AdapterError) as exc:
+        committed = commit_all(wt_path, f"loopeng: {spec.objective[:60]}") if passed else False
+        kept = passed and committed
+        diff = surface_diff(root, branch) if committed else ""
+    except WorktreeError as exc:
+        print(f"worktree finalize warning: {exc}", file=sys.stderr)
+    if not json_mode:
+        if kept and diff:
+            print(f"\n--- isolated run changed files (branch {branch}) ---")
+            print(diff, end="")
+            print(f"merge with:  git merge {branch}")
+        elif passed:
+            print("\nisolated run passed but changed nothing; worktree discarded.")
+        else:
+            print("\nisolated run did not pass; worktree discarded.")
+    try:
+        remove_worktree(root, wt_path, branch, keep_branch=kept)
+    except WorktreeError:
+        pass
+
+
+def cmd_run(args) -> int:
+    plugin_rc = _load_plugins(args)
+    if plugin_rc is not None:
+        return plugin_rc
+
+    using_skill = bool(getattr(args, "skill", None))
+    if args.resume and (args.isolate or using_skill):
+        # --isolate writes its ledger into a throwaway worktree that is then removed,
+        # and --skill renders a fresh spec each time, so resuming either is impossible.
+        print(
+            "error: --resume cannot be combined with --isolate or --skill "
+            "(their ledger/rendered state is ephemeral)",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        if using_skill:
+            spec, project_dir, spec_path = _spec_from_skill(args)
+        else:
+            spec_path = Path(args.spec).resolve()
+            spec = load_spec(spec_path)
+            project_dir = spec_path.parent
+    except (SpecError, AdapterError, SkillError) as exc:
         print(f"spec error: {exc}", file=sys.stderr)
         return 2
 
-    project_dir = spec_path.resolve().parent
     ledger_path = project_dir / STATE_DIR / "ledger.jsonl"
-    sink = _json_printer if args.json else _printer
+    base_sink = _json_printer if args.json else _printer
+    sink = base_sink
+    if spec.hooks is not None:
+        from .hooks import HookSink, compose_sinks
+
+        sink = compose_sinks(
+            base_sink, HookSink(spec.hooks, workspace=project_dir, report=base_sink)
+        )
 
     resume_decision = None
     if args.resume:
@@ -260,19 +374,36 @@ def cmd_run(args) -> int:
             return _refuse_resume(ledger_path, decision.run_id or "", decision.reason, decision.message, sink)
         resume_decision = decision
 
+    # Optional isolation: run the loop in a throwaway git worktree off HEAD so the
+    # user's main working tree is never touched. The diff is surfaced afterward and
+    # the worktree removed (its branch kept on success). Requires a git repo.
+    worktree_handle = None
+    run_project_dir = project_dir
+    if args.isolate:
+        from .worktree import create_isolated_worktree, repo_root
+
+        root = repo_root(project_dir)
+        wt_path, branch = create_isolated_worktree(root)
+        worktree_handle = (root, wt_path, branch)
+        run_project_dir = wt_path
+
+    result = None
     try:
         result = run_loop(
             spec,
-            project_dir,
+            run_project_dir,
             max_iterations=args.max_iterations,
             on_event=sink,
             resume=resume_decision,
-            spec_path=str(spec_path.resolve()),
-            reload_spec_path=str(spec_path.resolve()) if args.reload_spec else None,
+            spec_path=str(spec_path),
+            reload_spec_path=str(spec_path) if (args.reload_spec and not using_skill) else None,
         )
     except AdapterError as exc:
         print(f"adapter error: {exc}", file=sys.stderr)
         return 2
+    finally:
+        if worktree_handle is not None:
+            _finalize_worktree(worktree_handle, result, spec, json_mode=args.json)
 
     if not args.json:  # in --json mode stdout is a pure JSONL event stream
         print(
@@ -347,6 +478,9 @@ def cmd_status(args) -> int:
 
 
 def cmd_doctor(args) -> int:
+    plugin_rc = _load_plugins(args)
+    if plugin_rc is not None:
+        return plugin_rc
     spec_path = Path(args.spec)
     try:
         spec = load_spec(spec_path)
@@ -375,6 +509,143 @@ def cmd_doctor(args) -> int:
     else:
         print(f"adapter {pf.adapter_type!r}: NOT READY — {pf.reason}", file=sys.stderr)
     return 0 if pf.ok else 7
+
+
+def cmd_skill(args) -> int:
+    """List available skills, or show one rendered template + its parameters."""
+    from .skills import discover_skills, load_skill
+
+    project_dir = Path(args.dir)
+    if args.action == "show":
+        if not args.name:
+            print("usage: loopeng skill show <name>", file=sys.stderr)
+            return 2
+        try:
+            skill = load_skill(args.name, project_dir)
+        except SkillError as exc:
+            print(f"skill error: {exc}", file=sys.stderr)
+            return 2
+        if args.json:
+            params = {
+                n: {"required": p.required, "default": p.default, "description": p.description}
+                for n, p in skill.params.items()
+            }
+            print(json.dumps({"name": skill.name, "description": skill.description,
+                              "source": skill.source, "params": params}, ensure_ascii=False))
+        else:
+            print(f"{skill.name} [{skill.source}] — {skill.description}")
+            if skill.params:
+                print("parameters:")
+                for name, param in skill.params.items():
+                    req = "required" if param.required else f"default={param.default!r}"
+                    print(f"  {name} ({req}) — {param.description}")
+            print("\ntemplate:\n" + skill.raw_text)
+        return 0
+
+    # default: list
+    skills = discover_skills(project_dir)
+    if args.json:
+        print(json.dumps(
+            [{"name": s.name, "description": s.description, "source": s.source}
+             for s in skills.values()], ensure_ascii=False))
+    elif not skills:
+        print("no skills found (bundled, ~/.loopeng/skills/, or .loopeng/skills/)")
+    else:
+        for s in sorted(skills.values(), key=lambda s: s.name):
+            print(f"{s.name} [{s.source}] — {s.description}")
+    return 0
+
+
+def cmd_watch(args) -> int:
+    """Re-run the loop whenever watched files change (foreground, daemonless)."""
+    from .triggers import DEFAULT_IGNORE_DIRS, watch
+
+    run_args = [sys.executable, "-m", "loopeng", "run", "--spec", str(Path(args.spec).resolve())]
+    if args.json:
+        run_args.append("--json")
+    ignore = tuple(DEFAULT_IGNORE_DIRS) + tuple(args.ignore or ())
+    if not args.json:
+        print(f"watching {args.pattern} -> loopeng run (Ctrl-C to stop)")
+    return watch(
+        args.pattern,
+        run_args,
+        poll_interval=args.poll_interval,
+        debounce_quiet=args.debounce,
+        ignore_dirs=ignore,
+        run_on_start=args.run_on_start,
+        max_runs=args.max_runs,
+    )
+
+
+def cmd_schedule(args) -> int:
+    """Emit (or install with --apply) a crontab line that runs the loop periodically."""
+    from .triggers import build_cron_entry, current_crontab, install_crontab, upsert_cron
+
+    workdir = args.workdir or str(Path(args.spec).resolve().parent)
+    run_args = [sys.executable, "-m", "loopeng", "run", "--spec", str(Path(args.spec).name)]
+    entry = build_cron_entry(args.cron, run_args, marker=args.marker, workdir=workdir)
+    merged = upsert_cron(current_crontab(), entry, args.marker)
+    if args.apply:
+        try:
+            install_crontab(merged)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            # FileNotFoundError (no crontab binary) or a rejected crontab (check=True).
+            print(f"schedule error: {exc}", file=sys.stderr)
+            return 2
+        print(f"installed cron entry (# loopeng:{args.marker})")
+    else:
+        print(merged, end="" if merged.endswith("\n") else "\n")
+        print(f"# dry-run — re-run with --apply to install via `crontab -`", file=sys.stderr)
+    return 0
+
+
+def cmd_orchestrate(args) -> int:
+    """Run a multi-stage plan.yaml DAG (each stage is a full loopeng loop)."""
+    plugin_rc = _load_plugins(args)
+    if plugin_rc is not None:
+        return plugin_rc
+    from .orchestrator import orchestrate
+
+    try:
+        result = orchestrate(
+            args.plan, project_dir=args.dir, fail_fast=args.fail_fast, workers=args.workers
+        )
+    except (OrchestrationError, SpecError, AdapterError, SkillError) as exc:
+        print(f"orchestration error: {exc}", file=sys.stderr)
+        return 2
+
+    if args.json:
+        import dataclasses
+
+        print(json.dumps({
+            "plan_path": result.plan_path,
+            "exit_code": result.exit_code,
+            "workspace_mode": result.workspace_mode,
+            "worktree_branch": result.worktree_branch,
+            "worktree_kept": result.worktree_kept,
+            "stages": [dataclasses.asdict(s) for s in result.stages],
+        }, ensure_ascii=False))
+    else:
+        for stage in result.stages:
+            extra = f" ({stage.loop_status})" if stage.loop_status else ""
+            extra += f" — {stage.error}" if stage.error else ""
+            print(f"  [{stage.status}] {stage.name}{extra}")
+        if result.worktree_diff:
+            print(f"\n--- isolated plan changed files (branch {result.worktree_branch}) ---")
+            print(result.worktree_diff, end="")
+            if result.worktree_kept:
+                print(f"merge with:  git merge {result.worktree_branch}")
+        print(f"\nplan {'succeeded' if result.exit_code == 0 else 'failed'} "
+              f"({sum(s.status == 'success' for s in result.stages)}/{len(result.stages)} stages passed)")
+    return result.exit_code
+
+
+def cmd_mcp(args) -> int:
+    """Run loopeng as an MCP server over stdio (for Claude Code / Codex)."""
+    from .mcp_server import serve
+
+    serve(project_dir=args.dir)  # blocks on stdin until EOF; stdout is the JSON-RPC channel
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -423,6 +694,31 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="re-read loop.yaml before each iteration to pick up prompt edits (mid-run steering)",
     )
+    run_parser.add_argument(
+        "--skill",
+        default=None,
+        help="run a named reusable skill template instead of --spec (see `loopeng skill list`)",
+    )
+    run_parser.add_argument(
+        "--set",
+        action="append",
+        metavar="KEY=VALUE",
+        help="set a skill parameter (repeatable); only valid with --skill",
+    )
+    run_parser.add_argument(
+        "--isolate",
+        action="store_true",
+        help="run in a throwaway git worktree off HEAD; your main tree is never touched",
+    )
+    run_parser.add_argument(
+        "--plugin",
+        action="append",
+        metavar="MODULE_OR_PATH",
+        help="load a custom adapter plugin (dotted module or .py path); repeatable",
+    )
+    run_parser.add_argument(
+        "--dir", default=None, help="project directory for --skill resolution (default: cwd)"
+    )
     run_parser.set_defaults(func=cmd_run)
 
     status_parser = sub.add_parser("status", help="report live run state from the heartbeat")
@@ -439,7 +735,65 @@ def build_parser() -> argparse.ArgumentParser:
         "--spec", default="loop.yaml", help="path to the loop spec (default: loop.yaml)"
     )
     doctor_parser.add_argument("--json", action="store_true", help="emit a single JSON object")
+    doctor_parser.add_argument(
+        "--plugin", action="append", metavar="MODULE_OR_PATH",
+        help="load a custom adapter plugin before preflight (repeatable)",
+    )
     doctor_parser.set_defaults(func=cmd_doctor)
+
+    # --- skill: list / show reusable templates (positional action keeps flag order free) ---
+    skill_parser = sub.add_parser("skill", help="list or show reusable skill templates")
+    skill_parser.add_argument(
+        "action", nargs="?", choices=["list", "show"], default="list",
+        help="'list' (default) or 'show <name>'",
+    )
+    skill_parser.add_argument("name", nargs="?", help="skill name (required for 'show')")
+    skill_parser.add_argument("--dir", default=".", help="project dir for skill discovery (default: .)")
+    skill_parser.add_argument("--json", action="store_true", help="emit JSON")
+    skill_parser.set_defaults(func=cmd_skill)
+
+    # --- watch: re-run on file changes (foreground, daemonless) ---
+    watch_parser = sub.add_parser("watch", help="re-run the loop when watched files change")
+    watch_parser.add_argument("--spec", default="loop.yaml", help="loop spec to run (default: loop.yaml)")
+    watch_parser.add_argument(
+        "--pattern", action="append", required=True, metavar="GLOB",
+        help="glob to watch, e.g. 'src/**/*.py' (repeatable, required)",
+    )
+    watch_parser.add_argument("--poll-interval", type=float, default=0.5, dest="poll_interval")
+    watch_parser.add_argument("--debounce", type=float, default=0.3, help="quiet seconds before firing")
+    watch_parser.add_argument("--ignore", action="append", metavar="DIR", help="extra dir name to ignore")
+    watch_parser.add_argument("--run-on-start", action="store_true", dest="run_on_start")
+    watch_parser.add_argument("--max-runs", type=int, default=None, dest="max_runs")
+    watch_parser.add_argument("--json", action="store_true", help="pass --json to each `run`")
+    watch_parser.set_defaults(func=cmd_watch)
+
+    # --- schedule: emit/install a crontab line (no daemon) ---
+    schedule_parser = sub.add_parser("schedule", help="emit or install a cron line that runs the loop")
+    schedule_parser.add_argument("--spec", default="loop.yaml", help="loop spec to run")
+    schedule_parser.add_argument("--cron", required=True, help="5-field cron expression, e.g. '*/30 * * * *'")
+    schedule_parser.add_argument("--marker", required=True, help="idempotency key (one line per marker)")
+    schedule_parser.add_argument("--workdir", default=None, help="cwd for the cron job (default: spec's dir)")
+    schedule_parser.add_argument("--apply", action="store_true", help="install via `crontab -` (default: dry-run)")
+    schedule_parser.set_defaults(func=cmd_schedule)
+
+    # --- orchestrate: multi-stage plan.yaml DAG ---
+    orch_parser = sub.add_parser("orchestrate", help="run a multi-stage plan.yaml DAG")
+    orch_parser.add_argument("--plan", default="plan.yaml", help="path to plan.yaml (default: plan.yaml)")
+    orch_parser.add_argument("--dir", default=".", help="project directory (default: .)")
+    orch_parser.add_argument("--workers", type=int, default=4, help="max concurrent stages per level")
+    orch_parser.add_argument("--json", action="store_true", help="emit a JSON summary")
+    orch_parser.add_argument("--plugin", action="append", metavar="MODULE_OR_PATH", help="load a custom adapter plugin")
+    ff = orch_parser.add_mutually_exclusive_group()
+    ff.add_argument("--fail-fast", dest="fail_fast", action="store_true", default=None,
+                    help="stop after the first failed stage (overrides the plan)")
+    ff.add_argument("--no-fail-fast", dest="fail_fast", action="store_false",
+                    help="run independent stages even after a failure")
+    orch_parser.set_defaults(func=cmd_orchestrate)
+
+    # --- mcp: stdio MCP server for Claude Code / Codex ---
+    mcp_parser = sub.add_parser("mcp", help="run loopeng as an MCP server over stdio")
+    mcp_parser.add_argument("--dir", default=".", help="project dir to resolve skills/specs/status against")
+    mcp_parser.set_defaults(func=cmd_mcp)
 
     return parser
 
@@ -447,7 +801,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except LoopengError as exc:
+        # Safety net for typed errors a command didn't handle locally (e.g. a
+        # WorktreeError from --isolate). Specific commands still map their own
+        # exit codes; this only catches what would otherwise be a traceback.
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":  # pragma: no cover

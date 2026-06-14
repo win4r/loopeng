@@ -71,7 +71,7 @@ def test_forbidden_path_violation_recorded_and_blocks(git_repo):
 def test_change_outside_allowed_paths_blocks(git_repo):
     spec = _spec(
         {"require_clean_git": True, "allowed_paths": ["src/**"]},
-        agent_cmd=[PY, "-c", "open('hack.txt', 'w').write('x')"],
+        agent_cmd=[PY, "-c", "open('stray.txt', 'w').write('x')"],
         verify_cmd=[PY, "-c", "import sys; sys.exit(0)"],
         max_iterations=3,
         max_consecutive_failures=1,

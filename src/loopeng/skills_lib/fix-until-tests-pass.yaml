@@ -1,0 +1,33 @@
+# Bundled skill. Render with: loopeng run --skill fix-until-tests-pass --set test_cmd="pytest -q"
+skill:
+  name: fix-until-tests-pass
+  description: Drive a coding agent until a test/verify command exits 0.
+  params:
+    test_cmd:
+      description: Shell command whose exit 0 means done (e.g. "pytest -q").
+      required: true
+    objective:
+      description: What the agent should accomplish.
+      default: Make the failing checks pass with the smallest correct change.
+    agent:
+      description: Agent type — shell | claude-code | codex (default claude-code).
+      default: claude-code
+
+workspace: "."
+objective: "{{objective}}"
+agent:
+  type: "{{agent}}"
+  capabilities:
+    approval_mode: acceptEdits   # claude-code default; for codex set sandbox: workspace-write
+prompt: |
+  Objective: {{objective}}
+  The success check is: {{test_cmd}}
+  Verifier feedback from the previous attempt:
+  {{feedback}}
+  Make the check pass. Keep the change minimal and focused.
+verify:
+  command: ["sh", "-lc", "{{test_cmd}}"]
+limits:
+  max_iterations: 10
+  max_consecutive_failures: 4
+  timeout_seconds: 600

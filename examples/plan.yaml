@@ -1,0 +1,36 @@
+# examples/plan.yaml — a runnable multi-stage DAG using only the shell adapter
+# (no external agent CLI needed). Try it:
+#   cd examples && loopeng orchestrate --plan plan.yaml
+#
+# Stage graph:  generate ──> transform ──> check
+#                        └─> report (parallel with transform/check via its own dep)
+version: 1
+workspace: shared          # all stages share one work tree; "worktree" isolates the whole plan
+fail_fast: true
+
+stages:
+  generate:
+    loop:
+      objective: "Produce data.txt"
+      agent: { type: shell, command: ["sh", "-lc", "printf 'alpha\\nbeta\\ngamma\\n' > data.txt"] }
+      prompt: "{{feedback}}"
+      verify: { command: ["sh", "-lc", "test -s data.txt"] }
+      limits: { max_iterations: 2 }
+
+  transform:
+    needs: [generate]
+    loop:
+      objective: "Uppercase data.txt into out.txt"
+      agent: { type: shell, command: ["sh", "-lc", "tr a-z A-Z < data.txt > out.txt"] }
+      prompt: "{{feedback}}"
+      verify: { command: ["sh", "-lc", "grep -q ALPHA out.txt"] }
+      limits: { max_iterations: 2 }
+
+  check:
+    needs: [transform]
+    loop:
+      objective: "Confirm 3 transformed lines"
+      agent: { type: shell, command: ["sh", "-lc", "true"] }
+      prompt: "{{feedback}}"
+      verify: { command: ["sh", "-lc", "test $(wc -l < out.txt) -eq 3"] }
+      limits: { max_iterations: 1 }

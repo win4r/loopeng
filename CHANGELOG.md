@@ -4,6 +4,58 @@ All notable changes to loopeng are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions may change behavior).
 
+## [0.3.0] - 2026-06-13
+
+Grew the validated single-run core into a Loop Engineering **platform**. Every new
+layer composes on the same `run_loop` contract; the runner, safety posture, and
+existing `loop.yaml` are unchanged and backward-compatible.
+
+### Added
+- **Reusable skills** — parameterized `loop.yaml` templates with a `skill:` block.
+  `loopeng skill list` / `skill show`, `loopeng run --skill <name> --set k=v`.
+  The renderer substitutes only declared params, leaving `{{feedback}}`/`{{iteration}}`
+  for the runner. Bundled: `fix-until-tests-pass`, `shell-converge`. Discovery order:
+  project `.loopeng/skills/` > user `~/.loopeng/skills/` > bundled.
+- **Worktree isolation** — `loopeng run --isolate` runs the loop in a throwaway git
+  worktree off HEAD; your main working tree is never touched. On success the agent's
+  edits are committed to a disposable `loop/<hex>` branch, the diff is surfaced, and
+  the worktree removed (branch kept for `git merge`); discarded on failure.
+- **Triggers / scheduling (daemonless)** — `loopeng watch --pattern <glob>` re-runs the
+  loop on file changes (mtime-poll + debounce, self-write/.git/.loopeng ignored, exit
+  130 on Ctrl-C); `loopeng schedule --cron <expr> --marker <id>` emits (or `--apply`
+  installs) an idempotent crontab line.
+- **Multi-agent orchestration** — `loopeng orchestrate plan.yaml` runs a DAG of stages,
+  each a full loopeng loop (`spec:` / `skill:` / inline `loop:`), with `needs:`
+  dependencies, parallel levels (thread pool), fail-fast, an orchestration ledger, and
+  an optional whole-plan `workspace: worktree` isolation. Exit 0 all-passed, 1 any failed.
+- **Lifecycle hooks / connectors** — a `hooks:` block (`on_start`/`on_iteration`/
+  `on_success`/`on_failure`) shells out on loop events with `LOOPENG_*` env vars; a
+  failing hook is isolated, never fatal.
+- **Adapter plugins** — third parties register custom `agent.type` adapters via the
+  `loopeng.adapters` entry-point group or `loopeng run --plugin <module-or-path>`.
+  Entry-point plugins are failure-isolated; explicit `--plugin` is strict.
+- **MCP server** — `loopeng mcp` speaks newline-delimited JSON-RPC 2.0 over stdio
+  (MCP `2025-03-26`), exposing `loopeng_list_skills`, `loopeng_doctor`, `loopeng_status`,
+  and `loopeng_run` so Claude Code / Codex can drive loopeng as an MCP server.
+
+### Changed
+- `agent.type` is now validated against the live adapter registry (built-ins + plugins)
+  at `build_adapter` time instead of a frozen tuple at parse time, so plugin types are
+  accepted. Unknown types still fail with a clear "unknown agent type" error.
+
+### Hardened (pre-release adversarial review)
+- **Orchestration + blast-radius**: a level containing any blast-radius-gated stage now
+  runs serially. The gate reads tree-wide `git status`; concurrent stages in a shared
+  work tree would otherwise see each other's writes (false violations / wrong attribution).
+  Ungated levels still run in parallel.
+- **`run --isolate` / orchestrate worktree mode**: `commit_all` no longer stages loopeng's
+  own `.loopeng/` state, so the surfaced diff and the kept branch you merge contain only
+  the agent's work — not run bookkeeping (pid/cwd/fingerprint).
+- **`schedule`**: `--marker`/`--workdir` reject newlines and `--cron` must be exactly five
+  fields, so a malformed value can't inject a second crontab line or break marker idempotency.
+- **`--isolate` + `--resume`** is now rejected up front (the isolated ledger is ephemeral).
+- **Hooks**: failed/timed-out hooks now surface as a `⚠` line in text mode (were silent).
+
 ## [0.2.0] - 2026-06-13
 
 Hardened the supervised MVP core into a safer, observable, steerable runner.
