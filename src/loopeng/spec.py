@@ -19,8 +19,6 @@ from .baseline import DIRECTIONS, BaselineSpec
 from .blast_radius import BlastRadiusPolicy
 from .errors import SpecError
 
-ALLOWED_AGENT_TYPES = ("shell", "mock", "claude-code", "codex")
-
 # A command may be given as an argv list (exec'd directly) or a string
 # (run via `sh -lc <string>`, normalized later in adapters.normalize_command).
 Command = Union[str, List[str]]
@@ -68,6 +66,7 @@ class LoopSpec:
     context: Dict[str, object] = field(default_factory=dict)
     limits: Limits = field(default_factory=Limits)
     blast_radius: BlastRadiusPolicy = field(default_factory=BlastRadiusPolicy)
+    hooks: Optional["HooksSpec"] = None  # lifecycle shell hooks; None when absent
 
 
 def _require(condition: bool, message: str) -> None:
@@ -158,9 +157,13 @@ def parse_spec(data, *, source: str = "<dict>") -> LoopSpec:
     agent_raw = data.get("agent")
     _require(isinstance(agent_raw, dict), "agent is required and must be a mapping")
     agent_type = agent_raw.get("type", "shell")
+    # The adapter registry (built-ins + loaded plugins) is the single source of
+    # truth for valid types — build_adapter() rejects an unknown type, listing the
+    # available ones. We only require a non-empty string here so a plugin-provided
+    # type (registered after the spec is parsed) is not rejected at parse time.
     _require(
-        agent_type in ALLOWED_AGENT_TYPES,
-        f"agent.type must be one of {list(ALLOWED_AGENT_TYPES)}, got {agent_type!r}",
+        isinstance(agent_type, str) and agent_type.strip(),
+        f"agent.type must be a non-empty string, got {agent_type!r}",
     )
     command = agent_raw.get("command")
     if agent_type in ("shell", "mock"):
@@ -244,6 +247,10 @@ def parse_spec(data, *, source: str = "<dict>") -> LoopSpec:
 
     blast_radius = _parse_blast_radius(limits_raw)
 
+    from .hooks import parse_hooks  # local import keeps spec import-light
+
+    hooks = parse_hooks(data.get("hooks"))
+
     return LoopSpec(
         objective=objective,
         prompt=prompt,
@@ -253,6 +260,7 @@ def parse_spec(data, *, source: str = "<dict>") -> LoopSpec:
         context=context,
         limits=limits,
         blast_radius=blast_radius,
+        hooks=hooks,
     )
 
 

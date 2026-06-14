@@ -212,8 +212,8 @@ segment, `?` matches a single non-separator character.
 **Explicit limitation.** This is **not a security sandbox**. It only observes the
 git worktree *after* the agent runs, and only when the workspace is a git repository
 (otherwise the gate is skipped with a warning). It does **not** stop network access,
-data exfiltration, writes outside the repo, or destructive commands — it constrains
-the **repository write-set** only. Specifically: it matches path strings and does
+data being read or sent elsewhere, writes outside the repo, or destructive commands —
+it constrains the **repository write-set** only. Specifically: it matches path strings and does
 **not resolve symlinks**, so an agent could create a symlink inside an allowed path
 and write through it to a location outside the repo without tripping the gate; and
 `.git/` internals are invisible to `git status`, so they cannot be constrained by
@@ -340,9 +340,134 @@ changes its fingerprint, so a later `--resume` of a steered run needs `--force`.
 `7` adapter preflight failed (configured agent binary not found) ·
 `8` no progress (identical-feedback failures hit `no_progress_limit`).
 
+## Platform layers (v0.3.0)
+
+These layers all compose on the same `run_loop` core and stay **safe-by-default**:
+every external action is explicit, local, and user-configured. loopeng shells out
+only to commands you put in your own `loop.yaml` / `plan.yaml` / hooks, or to plugin
+code you explicitly load — there is no hidden network, credential, or remote-exec path.
+
+### Reusable skills
+
+A *skill* is a parameterized `loop.yaml` template (a `skill:` block declares params).
+The renderer substitutes only your declared `{{param}}`s and leaves `{{feedback}}` /
+`{{iteration}}` for the runner.
+
+```bash
+loopeng skill list                 # bundled + ~/.loopeng/skills/ + ./.loopeng/skills/
+loopeng skill show fix-until-tests-pass
+loopeng run --skill fix-until-tests-pass --set test_cmd="pytest -q"
+```
+
+Discovery precedence: project `.loopeng/skills/` > user `~/.loopeng/skills/` > bundled.
+Missing required params and unknown `--set` keys are hard errors (no silent wrong loop).
+The rendered spec is written to `.loopeng/skill-<name>.rendered.yaml` for transparency.
+
+### Worktree isolation (`run --isolate`)
+
+Run the loop in a throwaway **git worktree** off `HEAD` so your main working tree is
+never touched. On success the agent's edits are committed to a disposable `loop/<hex>`
+branch, the diff is surfaced, and the worktree directory is removed (branch kept so you
+can `git merge` it); on failure everything is discarded.
+
+```bash
+loopeng run --isolate              # requires a git repo with at least one commit
+```
+
+This is a convenience/safety boundary for *your own* experimentation, not a security
+sandbox (see **Safety model**). It never force-removes your main checkout.
+
+### Automation triggers (daemonless)
+
+```bash
+loopeng watch --pattern "src/**/*.py" --pattern "tests/**/*.py"   # re-run on change
+loopeng schedule --cron "*/30 * * * *" --marker nightly           # dry-run: prints the line
+loopeng schedule --cron "*/30 * * * *" --marker nightly --apply   # install into YOUR crontab
+```
+
+`watch` is a **foreground** process (no daemon): it polls file mtimes, debounces edit
+bursts, ignores `.loopeng/`/`.git/`/`__pycache__`/`.venv` to avoid self-triggering, and
+exits on Ctrl-C. `schedule` only **prints** a crontab line unless you pass `--apply`,
+which upserts a single idempotent line (keyed by `--marker`) into your own user crontab.
+
+### Multi-stage orchestration (`orchestrate plan.yaml`)
+
+A `plan.yaml` wires several loops into a DAG; each stage is itself a full loopeng loop.
+
+```yaml
+version: 1
+workspace: shared          # or "worktree" — isolate the whole plan off HEAD
+fail_fast: true
+stages:
+  lint:  { loop: { objective: "...", agent: {type: shell, command: ["sh","-lc","ruff check --fix ."]}, prompt: "{{feedback}}", verify: {command: ["sh","-lc","ruff check ."]}, limits: {max_iterations: 3} } }
+  test:  { needs: [lint], skill: fix-until-tests-pass, set: { test_cmd: "pytest -q" } }
+  docs:  { needs: [lint], spec: ./docs/loop.yaml }
+```
+
+```bash
+loopeng orchestrate --plan plan.yaml          # exit 0 all-passed, 1 any-failed, 2 bad plan
+loopeng orchestrate --plan plan.yaml --json
+```
+
+Independent stages in a level run concurrently; a stage runs only after every stage it
+`needs` has succeeded; a stage whose dependency failed is **skipped** (not a failure by
+itself). Each stage's loop is the same gated act→verify loop, so the same guardrails and
+blast-radius controls apply per stage. Because the blast-radius gate reads tree-wide
+`git status`, a level containing any blast-radius-gated stage runs **serially** (so each
+stage's write-set is attributed correctly); ungated levels run in parallel. A per-run
+ledger lands at `.loopeng/orchestrate-<id>.jsonl`.
+
+### Lifecycle hooks / connectors
+
+A `hooks:` block runs your own local shell commands on loop events — handy for
+notifications or CI glue. A failing or slow hook is isolated (bounded by a timeout) and
+**never changes the loop outcome**.
+
+```yaml
+hooks:
+  on_start:     ["echo started $LOOPENG_RUN_ID"]
+  on_iteration: ["./record.sh"]
+  on_success:   ["curl -fsS -X POST https://example/done"]   # your endpoint, your call
+  on_failure:   ["./alert.sh"]
+```
+
+Each command runs via `sh -lc` with `LOOPENG_EVENT`, `LOOPENG_STATUS`,
+`LOOPENG_RUN_ID`, `LOOPENG_ITERATION`, and `LOOPENG_EVENT_JSON` in the environment.
+Hooks are exactly the commands you write in your spec — nothing runs that you didn't put there.
+
+### Adapter plugins
+
+Register a custom `agent.type` without forking loopeng, via the `loopeng.adapters`
+entry-point group (installed packages) or an explicit `--plugin`:
+
+```bash
+loopeng run --plugin ./my_adapter.py        # a local .py file you point at
+loopeng run --plugin my_pkg.adapter         # an importable module
+```
+
+A plugin module exposes `register(registry)` that maps a type name to a builder.
+Entry-point plugins are **failure-isolated** (a broken one is a warning, not a crash);
+an explicit `--plugin` you name is loaded **strictly** (a bad path is a hard error). Plugins
+are ordinary local Python you choose to load — treat them like any dependency you install.
+
+### MCP server (`loopeng mcp`)
+
+Expose loopeng to an MCP client (Claude Code / Codex) over **stdio** as local,
+newline-delimited JSON-RPC 2.0 (MCP `2025-03-26`). Tools: `loopeng_list_skills`,
+`loopeng_doctor`, `loopeng_status`, `loopeng_run`.
+
+```jsonc
+// .mcp.json (Claude Code) — a local stdio server you opt into
+{ "mcpServers": { "loopeng": { "command": "loopeng", "args": ["mcp"] } } }
+```
+
+It is a local subprocess speaking on stdin/stdout — no network listener, no remote
+endpoint. It runs only the loops your skills/specs define, under the same guardrails.
+
 ## Not yet built (intentionally out of scope)
 
-Multi-agent orchestration, daemon mode, MCP integration, web UI, publishing.
+Daemon/long-running service mode, a web UI, deep (non-CLI) Claude/Codex API integration,
+and package publishing.
 
 ## License
 

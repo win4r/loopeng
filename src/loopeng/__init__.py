@@ -7,6 +7,10 @@ circuit breaker, per-command timeout), and an append-only JSONL ledger.
 
 Claude Code and Codex are *presets* layered on top of the generic shell adapter;
 the core never depends on either agent's internals.
+
+v0.3.0 adds platform layers that all compose on the same ``run_loop`` core:
+reusable skills, git-worktree isolation, daemonless triggers (watch/schedule),
+multi-stage DAG orchestration, lifecycle hooks, adapter plugins, and an MCP server.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

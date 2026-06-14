@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loopeng"
-version = "0.2.0"
+version = "0.3.0"
 description = "Agent-agnostic Loop Engineering runner: portable loop spec + verification gate + guardrails + auditable ledger."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -37,6 +37,9 @@ loopeng = "loopeng.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"loopeng.skills_lib" = ["*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,0 +1,26 @@
+# Bundled skill — pure shell, no external agent CLI required (handy for demos/tests).
+# loopeng run --skill shell-converge --set agent_cmd="echo x >> p" --set verify_cmd="test $(wc -l < p) -ge 3"
+skill:
+  name: shell-converge
+  description: Run a shell command in a loop until a shell verify command exits 0.
+  params:
+    agent_cmd:
+      description: Shell command the agent runs each iteration (receives the prompt on stdin and $LOOPENG_PROMPT).
+      required: true
+    verify_cmd:
+      description: Shell command whose exit 0 means success.
+      required: true
+    objective:
+      description: Human-readable objective.
+      default: Converge the shell loop.
+
+workspace: "."
+objective: "{{objective}}"
+agent:
+  type: shell
+  command: ["sh", "-lc", "{{agent_cmd}}"]
+prompt: "Iteration {{iteration}}. Feedback: {{feedback}}"
+verify:
+  command: ["sh", "-lc", "{{verify_cmd}}"]
+limits:
+  max_iterations: 10

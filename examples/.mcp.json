@@ -1,0 +1,9 @@
+{
+  "_comment": "Drop this at your project root (Claude Code) to expose loopeng as a local stdio MCP server. Codex: put the equivalent under [mcp_servers.loopeng] in ~/.codex/config.toml.",
+  "mcpServers": {
+    "loopeng": {
+      "command": "loopeng",
+      "args": ["mcp"]
+    }
+  }
+}

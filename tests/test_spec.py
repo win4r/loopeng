@@ -61,10 +61,25 @@ def test_missing_verify_raises():
         parse_spec(data)
 
 
-def test_bad_agent_type_raises():
+def test_unknown_agent_type_accepted_by_spec_rejected_by_adapter():
+    # The adapter registry (built-ins + plugins) is the source of truth: parse_spec
+    # accepts any non-empty type (a plugin may register it later); build_adapter
+    # rejects an unknown one, listing the available types.
+    from loopeng.adapters import build_adapter
+    from loopeng.errors import AdapterError
+
     data = valid_spec_dict()
     data["agent"]["type"] = "wat"
-    with pytest.raises(SpecError):
+    spec = parse_spec(data)  # no longer raises at parse time
+    assert spec.agent.type == "wat"
+    with pytest.raises(AdapterError, match="unknown agent type"):
+        build_adapter(spec.agent)
+
+
+def test_empty_agent_type_rejected():
+    data = valid_spec_dict()
+    data["agent"]["type"] = ""
+    with pytest.raises(SpecError, match="non-empty string"):
         parse_spec(data)
 
 
