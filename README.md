@@ -239,6 +239,7 @@ under the **same `run_id`**.
 | no resumable run in the ledger | — |
 | the latest run already **succeeded** | — |
 | the latest run ended **`blocked`** | `--force` |
+| the latest run ended **`no_progress`** | `--force` |
 | the spec **fingerprint changed** since that run | `--force` |
 
 The **spec fingerprint** is a hash of the spec's *meaning* — every field of the parsed

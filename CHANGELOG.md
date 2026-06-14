@@ -15,7 +15,8 @@ Hardened the supervised MVP core into a safer, observable, steerable runner.
 - **CI** — GitHub Actions running the test suite on Python 3.9, 3.12, and 3.13.
 - **Resume** — `loopeng run --resume` reconstructs the latest run from the ledger and
   continues (restores the iteration and consecutive-failure counters); refuses (exit 6)
-  on a finished/blocked/in-progress run or a changed spec fingerprint unless `--force`.
+  on a succeeded run (no override), or a blocked / no-progress / in-progress run or a
+  changed spec fingerprint (those overridable with `--force`).
 - **Heartbeat + status** — `.loopeng/heartbeat.json` per phase; `loopeng status [--json]`
   reports run state and staleness (pid-authoritative).
 - **Typed events + `run --json`** — the runner emits typed event dicts; `--json` streams
