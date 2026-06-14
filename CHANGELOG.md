@@ -4,6 +4,38 @@ All notable changes to loopeng are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions may change behavior).
 
+## [0.3.1] - 2026-06-14
+
+Fixes from a real-world dogfood of the v0.3.0 release assets (every platform layer
+exercised end-to-end against the installed wheel/sdist by independent agents).
+
+### Fixed
+- **skills (critical):** one malformed file in a `.loopeng/skills/` dir no longer breaks
+  *all* skill operations (incl. bundled skills). A bad file is now warned-and-skipped, as
+  the docstring always promised. `--set` values containing a newline are rejected.
+- **plugins:** an explicit `--plugin` whose `register()` raises is now a clean `PluginError`
+  (exit 2), not a raw traceback; overriding an already-registered agent type emits a warning.
+  `build_adapter` also normalizes a plugin builder that raises at build time or returns a
+  non-adapter object into a clean `AdapterError` (was a raw traceback / late `AttributeError`).
+- **MCP:** `tools/call`/`initialize` with non-object `params`/`arguments` now returns
+  JSON-RPC `-32602 Invalid params` instead of silently dropping the request (which hung a
+  synchronous client); `serve()` always replies to a request id even on an internal error.
+- **`run --isolate`:** refuses an absolute/escaping `workspace:` (which would silently
+  bypass isolation and mutate the real tree); lifecycle hooks now run with `cwd` = the
+  loop's workspace (the worktree under `--isolate`), so relative-path hooks resolve correctly.
+- **`schedule`:** a malformed `--cron`/`--marker` is a clean error (exit 2), not a traceback;
+  empty markers are rejected.
+- **`watch`:** `--max-runs 0` fires nothing; a non-positive `--poll-interval` is rejected.
+- **orchestrate:** structurally-invalid plans (bad `version`, non-bool `fail_fast`, a stage
+  with zero/two sources) fail as a "bad plan" (exit 2), not a stage failure (exit 1).
+- **resume/status:** `pid_alive` treats a non-positive pid as dead (a corrupted heartbeat no
+  longer blocks resume); the `blocked` message reports the consecutive-failure limit; the
+  `require_clean_git` precondition message names the offending paths.
+- **`run`:** `--set` without `--skill` is now an error (matching `--help`).
+- **docs:** README skills example warns that `fix-until-tests-pass` launches a real billable
+  agent (and shows a no-agent `shell-converge` demo); corrected the stale version string,
+  the `schedule` dry-run description, and the `examples/plan.yaml` stage-graph comment.
+
 ## [0.3.0] - 2026-06-13
 
 Grew the validated single-run core into a Loop Engineering **platform**. Every new

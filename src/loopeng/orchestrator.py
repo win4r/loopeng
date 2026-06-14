@@ -109,8 +109,13 @@ def _load_plan(plan_path) -> dict:
         raise OrchestrationError(f"{path}: the top level must be a mapping")
 
     version = data.get("version")
-    if version != 1:
-        raise OrchestrationError(f"plan version must be 1, got {version!r}")
+    # Require the integer 1 specifically: bool (True==1), float 1.0, and "1" must all
+    # be rejected so a typo'd version can't silently pass.
+    if isinstance(version, bool) or not isinstance(version, int) or version != 1:
+        raise OrchestrationError(f"plan version must be the integer 1, got {version!r}")
+    fail_fast = data.get("fail_fast", True)
+    if not isinstance(fail_fast, bool):
+        raise OrchestrationError(f"plan fail_fast must be true or false, got {fail_fast!r}")
     return data
 
 
@@ -132,6 +137,14 @@ def _parse_stages(data: dict) -> Dict[str, dict]:
         needs = body.get("needs", []) or []
         if not (isinstance(needs, list) and all(isinstance(n, str) for n in needs)):
             raise OrchestrationError(f"stage {key!r}: `needs` must be a list of stage names")
+        # Structural check at PARSE time (not inside the worker), so a malformed plan is
+        # a "bad plan" -> exit 2, distinct from a stage whose loop fails to converge
+        # (exit 1) or whose spec/skill file is missing at run time (a stage failure).
+        sources = [k for k in ("spec", "skill", "loop") if k in body]
+        if len(sources) != 1:
+            raise OrchestrationError(
+                f"stage {key!r} must have exactly one of spec/skill/loop, got {sources or 'none'}"
+            )
         stages[key] = {**body, "needs": list(needs)}
     for name, body in stages.items():
         for dep in body["needs"]:

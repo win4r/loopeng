@@ -323,3 +323,28 @@ def test_serve_notification_yields_no_response_frame():
             proc.kill()
     frames = [json.loads(line) for line in out.splitlines() if line.strip()]
     assert [f.get("id") for f in frames] == [1, 99]  # notification produced no frame
+
+
+def test_dispatch_non_object_params_is_invalid_params():
+    """HIGH regression: non-object params must be Invalid params (-32602), never a
+    dropped request (which hangs a synchronous client)."""
+    from loopeng.mcp_server import INVALID_PARAMS, dispatch
+
+    resp = dispatch({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": "hi"})
+    assert resp is not None and resp["error"]["code"] == INVALID_PARAMS
+    assert resp["id"] == 1
+
+
+def test_dispatch_tools_call_non_object_arguments_is_invalid_params():
+    from loopeng.mcp_server import INVALID_PARAMS, dispatch
+
+    resp = dispatch({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                     "params": {"name": "loopeng_status", "arguments": [1, 2, 3]}})
+    assert resp["error"]["code"] == INVALID_PARAMS and resp["id"] == 2
+
+
+def test_dispatch_tools_call_missing_name_is_invalid_params():
+    from loopeng.mcp_server import INVALID_PARAMS, dispatch
+
+    resp = dispatch({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {}})
+    assert resp["error"]["code"] == INVALID_PARAMS and resp["id"] == 3

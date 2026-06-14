@@ -276,13 +276,14 @@ stages:
       verify: {{command: [{PY!r}, '-c', 'import sys; sys.exit(0)']}}
 """,
     )
-    with pytest.raises(OrchestrationError, match="version must be 1"):
+    with pytest.raises(OrchestrationError, match="version must be the integer 1"):
         orchestrate(plan, project_dir=tmp_path)
 
 
 def test_stage_with_two_spec_sources_is_rejected(tmp_path):
-    # A stage declaring both `loop:` and `spec:` is ambiguous -> recorded as a
-    # stage failure (resolution happens in the worker), so exit_code is 1.
+    # A stage declaring both `loop:` and `spec:` is a STRUCTURAL plan error, caught at
+    # parse time -> OrchestrationError (a "bad plan", exit 2), not a per-stage runtime
+    # failure (exit 1). A missing spec/skill FILE is still a runtime stage failure.
     plan = _write_plan(
         tmp_path,
         f"""
@@ -297,10 +298,8 @@ stages:
       verify: {{command: [{PY!r}, '-c', 'import sys; sys.exit(0)']}}
 """,
     )
-    result = orchestrate(plan, project_dir=tmp_path)
-    assert result.stages[0].status == "failed"
-    assert "exactly one" in (result.stages[0].error or "")
-    assert result.exit_code == 1
+    with pytest.raises(OrchestrationError, match="exactly one of spec/skill/loop"):
+        orchestrate(plan, project_dir=tmp_path)
 
 
 def test_orchestration_ledger_is_written(tmp_path):
@@ -472,3 +471,40 @@ stages:
     result = orchestrate(plan, project_dir=tmp_path, run_id="spec")
     assert result.exit_code == 0
     assert result.stages[0].loop_status == "success"
+
+
+def test_plan_fail_fast_must_be_bool(tmp_path):
+    plan = _write_plan(
+        tmp_path,
+        f"""
+version: 1
+fail_fast: "no"
+stages:
+  A:
+    loop:
+      objective: o
+      prompt: p
+      agent: {{type: shell, command: [{PY!r}, '-c', 'pass']}}
+      verify: {{command: [{PY!r}, '-c', 'import sys; sys.exit(0)']}}
+""",
+    )
+    with pytest.raises(OrchestrationError, match="fail_fast must be"):
+        orchestrate(plan, project_dir=tmp_path)
+
+
+def test_plan_version_float_is_rejected(tmp_path):
+    plan = _write_plan(
+        tmp_path,
+        f"""
+version: 1.0
+stages:
+  A:
+    loop:
+      objective: o
+      prompt: p
+      agent: {{type: shell, command: [{PY!r}, '-c', 'pass']}}
+      verify: {{command: [{PY!r}, '-c', 'import sys; sys.exit(0)']}}
+""",
+    )
+    with pytest.raises(OrchestrationError, match="version must be the integer 1"):
+        orchestrate(plan, project_dir=tmp_path)

@@ -239,4 +239,18 @@ def build_adapter(agent: AgentSpec) -> ShellAdapter:
         raise AdapterError(
             f"unknown agent type {agent.type!r}; expected one of {sorted(_BUILDERS)}"
         )
-    return builder(agent)
+    # A builder may be third-party plugin code: a raise (other than AdapterError) or a
+    # non-adapter return must surface as a clean AdapterError, not a raw traceback later
+    # (callers map AdapterError -> exit 2). Built-in builders are unaffected.
+    try:
+        adapter = builder(agent)
+    except AdapterError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - normalize any builder failure
+        raise AdapterError(f"adapter builder for {agent.type!r} failed: {exc}") from exc
+    if not (hasattr(adapter, "preflight") and hasattr(adapter, "build_command")):
+        raise AdapterError(
+            f"adapter builder for {agent.type!r} returned a non-adapter object "
+            f"({type(adapter).__name__}); expected a ShellAdapter-like object"
+        )
+    return adapter

@@ -340,13 +340,21 @@ def run_loop(
         else:
             # On resume the tree is dirty with the prior segment's own output, so
             # the clean-tree precondition only applies to a fresh run.
-            if policy.require_clean_git and not resuming and _dirty_paths(workspace):
+            precondition_dirty = (
+                _dirty_paths(workspace) if (policy.require_clean_git and not resuming) else set()
+            )
+            if precondition_dirty:
+                # Name the offending paths so the user can act — a common surprise is
+                # the (untracked) loop.yaml the user just created tripping this.
+                shown = sorted(precondition_dirty)
+                listed = ", ".join(shown[:5]) + (" …" if len(shown) > 5 else "")
+                reason = f"working tree not clean at loop start: {listed}"
                 ledger.append(
                     {
                         "event": "blast_radius_precondition_failed",
                         "type": ev.RUN_FAILED,
                         "run_id": run_id,
-                        "reason": "working tree not clean at loop start",
+                        "reason": reason,
                     }
                 )
                 ledger.append(
@@ -361,7 +369,7 @@ def run_loop(
                 emit(
                     ev.RUN_FAILED,
                     status="precondition_failed",
-                    reason="working tree not clean at loop start",
+                    reason=reason,
                 )
                 beat(PHASE_FAILED)
                 return LoopResult(
@@ -576,7 +584,8 @@ def run_loop(
         status=status,
         iterations=st.iteration,
         consecutive_failures=st.consecutive_failures,
-        limit=limit,
+        limit=limit,  # the max_iterations limit (for the 'exhausted' message)
+        max_consecutive_failures=spec.limits.max_consecutive_failures,  # for the 'blocked' message
     )
     beat(terminal_phase)
     return LoopResult(

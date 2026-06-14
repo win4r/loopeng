@@ -304,3 +304,25 @@ def test_build_cron_entry_rejects_wrong_field_count():
 def test_build_cron_entry_normalizes_whitespace():
     entry = build_cron_entry("  0   3 * * *  ", ["loopeng", "run"], marker="m")
     assert entry.startswith("0 3 * * * cd ")
+
+
+def test_build_cron_entry_rejects_empty_marker():
+    with pytest.raises(ValueError, match="non-empty"):
+        build_cron_entry("*/30 * * * *", ["loopeng", "run"], marker="   ")
+
+
+def test_watch_max_runs_zero_fires_nothing(tmp_path):
+    from loopeng.triggers import watch
+
+    sentinel = tmp_path / "ran.log"
+    cmd = [sys.executable, "-c", f"open({str(sentinel)!r}, 'a').write('x')"]
+    rc = watch([str(tmp_path / "*.txt")], cmd, max_runs=0, run_on_start=True, poll_interval=0.05)
+    assert rc == 1
+    assert not sentinel.exists()  # zero runs, not one
+
+
+def test_watch_rejects_nonpositive_poll_interval(tmp_path):
+    from loopeng.triggers import watch
+
+    with pytest.raises(ValueError, match="poll_interval"):
+        watch([str(tmp_path / "*.txt")], ["true"], poll_interval=0)

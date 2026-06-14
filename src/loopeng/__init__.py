@@ -13,4 +13,4 @@ reusable skills, git-worktree isolation, daemonless triggers (watch/schedule),
 multi-stage DAG orchestration, lifecycle hooks, adapter plugins, and an MCP server.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"

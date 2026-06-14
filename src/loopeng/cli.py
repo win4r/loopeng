@@ -200,7 +200,7 @@ def _render_event(event: dict) -> Optional[str]:
     if kind == "run_blocked":
         return (
             f"✗ blocked — {event.get('consecutive_failures')} consecutive failures "
-            f"(limit {event.get('limit')})"
+            f"(limit {event.get('max_consecutive_failures', event.get('limit'))})"
         )
     if kind == "run_failed":
         if event.get("status") in ("preflight_failed", "no_progress"):
@@ -265,11 +265,21 @@ def _load_plugins(args) -> Optional[int]:
         print(f"plugin warning: {warning}", file=sys.stderr)
     for module_spec in (getattr(args, "plugin", None) or []):
         try:
-            load_explicit_plugin(module_spec, _BUILDERS)
+            for warning in load_explicit_plugin(module_spec, _BUILDERS):
+                print(f"plugin warning: {warning}", file=sys.stderr)
         except PluginError as exc:
             print(f"plugin error: {exc}", file=sys.stderr)
             return 2
     return None
+
+
+def _is_within(child: Path, parent: Path) -> bool:
+    """True if ``child`` is the same as or nested under ``parent`` (after resolving)."""
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def _spec_from_skill(args):
@@ -322,6 +332,9 @@ def cmd_run(args) -> int:
         return plugin_rc
 
     using_skill = bool(getattr(args, "skill", None))
+    if getattr(args, "set", None) and not using_skill:
+        print("error: --set is only valid with --skill", file=sys.stderr)
+        return 2
     if args.resume and (args.isolate or using_skill):
         # --isolate writes its ledger into a throwaway worktree that is then removed,
         # and --skill renders a fresh spec each time, so resuming either is impossible.
@@ -343,13 +356,44 @@ def cmd_run(args) -> int:
         return 2
 
     ledger_path = project_dir / STATE_DIR / "ledger.jsonl"
+
+    # Optional isolation (resolved FIRST so hooks run with the right cwd): run the loop
+    # in a throwaway git worktree off HEAD so the user's main tree is never touched.
+    # The diff is surfaced afterward and the worktree removed (branch kept on success).
+    worktree_handle = None
+    run_project_dir = project_dir
+    if args.isolate:
+        from .worktree import create_isolated_worktree, remove_worktree, repo_root
+
+        root = repo_root(project_dir)
+        wt_path, branch = create_isolated_worktree(root)
+        # The agent's workspace MUST resolve inside the worktree, else --isolate would
+        # silently no-op and mutate the real tree. An absolute / parent-escaping
+        # `workspace:` can't be isolated -> refuse and tear the worktree back down.
+        if not _is_within((wt_path / spec.workspace).resolve(), wt_path):
+            try:
+                remove_worktree(root, wt_path, branch, keep_branch=False)
+            except WorktreeError:
+                pass
+            print(
+                f"error: --isolate cannot honor workspace {spec.workspace!r} "
+                "(it resolves outside the isolated worktree); use a workspace inside the repo",
+                file=sys.stderr,
+            )
+            return 2
+        worktree_handle = (root, wt_path, branch)
+        run_project_dir = wt_path
+
+    # Hooks run with cwd = the same workspace the agent/verifier use (the worktree
+    # under --isolate), so a relative-path hook resolves where the user expects.
+    run_workspace = (run_project_dir / spec.workspace).resolve()
     base_sink = _json_printer if args.json else _printer
     sink = base_sink
     if spec.hooks is not None:
         from .hooks import HookSink, compose_sinks
 
         sink = compose_sinks(
-            base_sink, HookSink(spec.hooks, workspace=project_dir, report=base_sink)
+            base_sink, HookSink(spec.hooks, workspace=run_workspace, report=base_sink)
         )
 
     resume_decision = None
@@ -373,19 +417,6 @@ def cmd_run(args) -> int:
         if not decision.resumable:
             return _refuse_resume(ledger_path, decision.run_id or "", decision.reason, decision.message, sink)
         resume_decision = decision
-
-    # Optional isolation: run the loop in a throwaway git worktree off HEAD so the
-    # user's main working tree is never touched. The diff is surfaced afterward and
-    # the worktree removed (its branch kept on success). Requires a git repo.
-    worktree_handle = None
-    run_project_dir = project_dir
-    if args.isolate:
-        from .worktree import create_isolated_worktree, repo_root
-
-        root = repo_root(project_dir)
-        wt_path, branch = create_isolated_worktree(root)
-        worktree_handle = (root, wt_path, branch)
-        run_project_dir = wt_path
 
     result = None
     try:
@@ -565,16 +596,20 @@ def cmd_watch(args) -> int:
         run_args.append("--json")
     ignore = tuple(DEFAULT_IGNORE_DIRS) + tuple(args.ignore or ())
     if not args.json:
-        print(f"watching {args.pattern} -> loopeng run (Ctrl-C to stop)")
-    return watch(
-        args.pattern,
-        run_args,
-        poll_interval=args.poll_interval,
-        debounce_quiet=args.debounce,
-        ignore_dirs=ignore,
-        run_on_start=args.run_on_start,
-        max_runs=args.max_runs,
-    )
+        print(f"watching {args.pattern} -> loopeng run (Ctrl-C to stop)", flush=True)
+    try:
+        return watch(
+            args.pattern,
+            run_args,
+            poll_interval=args.poll_interval,
+            debounce_quiet=args.debounce,
+            ignore_dirs=ignore,
+            run_on_start=args.run_on_start,
+            max_runs=args.max_runs,
+        )
+    except ValueError as exc:  # e.g. non-positive --poll-interval
+        print(f"watch error: {exc}", file=sys.stderr)
+        return 2
 
 
 def cmd_schedule(args) -> int:
@@ -583,7 +618,11 @@ def cmd_schedule(args) -> int:
 
     workdir = args.workdir or str(Path(args.spec).resolve().parent)
     run_args = [sys.executable, "-m", "loopeng", "run", "--spec", str(Path(args.spec).name)]
-    entry = build_cron_entry(args.cron, run_args, marker=args.marker, workdir=workdir)
+    try:
+        entry = build_cron_entry(args.cron, run_args, marker=args.marker, workdir=workdir)
+    except ValueError as exc:  # malformed --cron / --marker -> clean error, not a traceback
+        print(f"schedule error: {exc}", file=sys.stderr)
+        return 2
     merged = upsert_cron(current_crontab(), entry, args.marker)
     if args.apply:
         try:

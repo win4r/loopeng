@@ -78,3 +78,13 @@ def test_read_heartbeat_returns_none_on_corrupt(tmp_path):
     path.write_text("{not valid json", encoding="utf-8")
     assert read_heartbeat(path) is None
     assert is_stale(read_heartbeat(path)) is True
+
+
+def test_pid_alive_rejects_nonpositive_pids():
+    """A corrupted heartbeat with pid 0/-1 must read as dead, not target a process group."""
+    from loopeng.heartbeat import pid_alive
+
+    assert pid_alive(0) is False
+    assert pid_alive(-1) is False
+    assert pid_alive(None) is False
+    assert pid_alive("notanint") is False

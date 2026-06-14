@@ -298,3 +298,26 @@ def test_load_plugins_can_skip_entry_points(tmp_path):
     iter_mock.assert_not_called()
     assert warnings == []
     assert "myplugin" in registry
+
+
+def test_explicit_plugin_register_raising_is_pluginerror(tmp_path):
+    """HIGH regression: register() raising a non-import error -> PluginError (exit 2),
+    not a raw traceback."""
+    from loopeng.errors import PluginError
+    from loopeng.plugins import load_explicit_plugin
+
+    f = tmp_path / "boom.py"
+    f.write_text("def register(reg):\n    raise RuntimeError('boom')\n", encoding="utf-8")
+    with pytest.raises(PluginError, match="failed in register"):
+        load_explicit_plugin(str(f), {})
+
+
+def test_explicit_plugin_override_returns_warning(tmp_path):
+    """MEDIUM regression: overriding an already-registered type is visible (a warning)."""
+    from loopeng.plugins import load_explicit_plugin
+
+    f = tmp_path / "ov.py"
+    f.write_text("def register(reg):\n    reg['shell'] = lambda a: None\n", encoding="utf-8")
+    reg = {"shell": object()}
+    warnings = load_explicit_plugin(str(f), reg)
+    assert any("overwrote" in w and "shell" in w for w in warnings)

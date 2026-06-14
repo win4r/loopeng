@@ -2,8 +2,7 @@
 # (no external agent CLI needed). Try it:
 #   cd examples && loopeng orchestrate --plan plan.yaml
 #
-# Stage graph:  generate ──> transform ──> check
-#                        └─> report (parallel with transform/check via its own dep)
+# Stage graph (linear):  generate ──> transform ──> check
 version: 1
 workspace: shared          # all stages share one work tree; "worktree" isolates the whole plan
 fail_fast: true
