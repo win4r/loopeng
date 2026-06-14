@@ -270,11 +270,19 @@ def fingerprint(spec: LoopSpec) -> str:
     """A stable hash of the spec's *meaning* (not its YAML formatting/comments).
 
     Used to detect whether a spec changed between an original run and a resume.
-    None-valued optional fields are omitted so introducing a new optional field
-    does not invalidate the fingerprint of specs that leave it unset.
+    None-valued optional fields are omitted, and a non-cached context entry collapses
+    to its bare command, so introducing an optional field or wrapping context in a
+    ContextSpec does not invalidate the fingerprint of specs that don't use the feature.
     """
-    payload = json.dumps(_strip_none(asdict(spec)), sort_keys=True, default=str)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    payload = asdict(spec)
+    # A cache-off context entry is semantically just its command; only cache:true differs.
+    context = payload.get("context") or {}
+    payload["context"] = {
+        name: (entry["command"] if not entry.get("cache") else entry)
+        for name, entry in context.items()
+    }
+    canonical = json.dumps(_strip_none(payload), sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 def load_spec(path) -> LoopSpec:
