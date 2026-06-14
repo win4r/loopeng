@@ -41,8 +41,9 @@ from .heartbeat import (
     HeartbeatWriter,
 )
 from .ledger import LEDGER_SCHEMA_VERSION, Ledger
+from .errors import SpecError
 from .proc import run_proc
-from .spec import LoopSpec
+from .spec import LoopSpec, load_spec
 from .spec import fingerprint as spec_fingerprint
 
 _PLACEHOLDER = re.compile(r"{{\s*([a-zA-Z0-9_.]+)\s*}}")
@@ -150,6 +151,7 @@ def run_loop(
     resume=None,
     run_id: Optional[str] = None,
     spec_path: Optional[str] = None,
+    reload_spec_path: Optional[str] = None,
 ) -> LoopResult:
     project_dir = Path(project_dir)
     workspace = (project_dir / spec.workspace).resolve()
@@ -374,10 +376,25 @@ def run_loop(
     feedback = ""
     status = "exhausted"
     context_cache: dict = {}  # persists cached-once context outputs across iterations
+    active_prompt = spec.prompt  # may be hot-reloaded mid-run for steering
 
     while st.iteration < limit:
         st.iteration += 1
         emit(ev.ITERATION_STARTED, iteration=st.iteration)
+
+        # Mid-run steering: re-read the spec file and pick up an edited prompt. An invalid
+        # spec (caught mid-edit) is ignored so the loop keeps using the last good prompt.
+        if reload_spec_path:
+            try:
+                reloaded = load_spec(reload_spec_path)
+            except (SpecError, OSError, UnicodeDecodeError) as exc:
+                # load_spec already maps read/decode errors to SpecError; the extra
+                # classes are defensive so a mid-edit race can never crash the loop.
+                emit(ev.SPEC_RELOAD_FAILED, iteration=st.iteration, reason=str(exc))
+            else:
+                if reloaded.prompt != active_prompt:
+                    active_prompt = reloaded.prompt
+                    emit(ev.PROMPT_STEERED, iteration=st.iteration)
 
         beat(PHASE_GATHERING_CONTEXT)
         if spec.context:
@@ -395,7 +412,7 @@ def run_loop(
             emit(ev.CONTEXT_COMPLETED, iteration=st.iteration)
 
         prompt = render_template(
-            spec.prompt,
+            active_prompt,
             {
                 "objective": spec.objective,
                 "feedback": feedback,

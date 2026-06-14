@@ -36,6 +36,8 @@ BLAST_RADIUS_SKIPPED = "blast_radius_skipped"
 ADAPTER_PREFLIGHT_PASSED = "adapter_preflight_passed"
 ADAPTER_PREFLIGHT_FAILED = "adapter_preflight_failed"
 NO_PROGRESS_DETECTED = "no_progress_detected"
+PROMPT_STEERED = "prompt_steered"
+SPEC_RELOAD_FAILED = "spec_reload_failed"
 
 EVENT_TYPES = frozenset(
     {
@@ -64,6 +66,8 @@ EVENT_TYPES = frozenset(
         ADAPTER_PREFLIGHT_PASSED,
         ADAPTER_PREFLIGHT_FAILED,
         NO_PROGRESS_DETECTED,
+        PROMPT_STEERED,
+        SPEC_RELOAD_FAILED,
     }
 )
 

@@ -197,6 +197,10 @@ def _render_event(event: dict) -> Optional[str]:
         return f"✗ adapter preflight failed — {event.get('reason')}"
     if kind == "no_progress_detected":
         return f"✗ no progress — {event.get('streak')} consecutive iterations with identical feedback"
+    if kind == "prompt_steered":
+        return f"↻ prompt steered from loop.yaml (iteration {event.get('iteration')})"
+    if kind == "spec_reload_failed":
+        return f"⚠ spec reload ignored (invalid mid-edit): {event.get('reason')}"
     if kind == "resume_refused":
         return f"✗ resume refused — {event.get('message') or event.get('reason')}"
     return None
@@ -263,6 +267,7 @@ def cmd_run(args) -> int:
             on_event=sink,
             resume=resume_decision,
             spec_path=str(spec_path.resolve()),
+            reload_spec_path=str(spec_path.resolve()) if args.reload_spec else None,
         )
     except AdapterError as exc:
         print(f"adapter error: {exc}", file=sys.stderr)
@@ -410,6 +415,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="emit one typed JSON event per line to stdout (machine-readable stream)",
+    )
+    run_parser.add_argument(
+        "--reload-spec",
+        action="store_true",
+        help="re-read loop.yaml before each iteration to pick up prompt edits (mid-run steering)",
     )
     run_parser.set_defaults(func=cmd_run)
 
