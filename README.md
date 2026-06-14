@@ -303,6 +303,21 @@ limits:
                           # ("no new evidence") — tighter than the consecutive-failure breaker.
 ```
 
+### Mid-run steering
+
+`loopeng run --reload-spec` re-reads `loop.yaml` at the start of each iteration and picks
+up an edited **prompt** — so you can steer a long run by editing the file while it's going,
+without stopping it:
+
+```bash
+loopeng run --reload-spec      # then edit loop.yaml's prompt; the next iteration uses it
+```
+
+Only the prompt is hot-reloaded (agent, verify, limits, and safety controls are fixed at
+run start). An invalid spec caught mid-edit is ignored (event `spec_reload_failed`) so the
+loop keeps using the last good prompt; a successful change emits `prompt_steered`. Editing
+the spec does change its fingerprint, so a later `--resume` of a steered run needs `--force`.
+
 ### Exit codes
 
 `0` success · `2` spec/adapter error · `3` blocked · `4` exhausted ·
