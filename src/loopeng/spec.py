@@ -138,9 +138,25 @@ def _parse_baseline(raw) -> BaselineSpec:
     return BaselineSpec(regex=regex, direction=direction, value=value, name=str(raw.get("metric", "metric")))
 
 
+_BLAST_RADIUS_KEYS = frozenset(
+    {"blast_radius", "require_clean_git", "max_changed_files", "allowed_paths", "forbidden_paths"}
+)
+
+
 def parse_spec(data, *, source: str = "<dict>") -> LoopSpec:
     """Validate a plain dict (already-parsed YAML) into a LoopSpec."""
     _require(isinstance(data, dict), f"{source}: the top level must be a mapping")
+
+    # Blast-radius controls live UNDER `limits:`. Placing them at the top level (a
+    # natural mistake — the LoopSpec field and the README section are both called
+    # "blast_radius") would otherwise be silently ignored, leaving the user believing
+    # the gate is active when it is not. Fail loudly with the fix.
+    misplaced = sorted(_BLAST_RADIUS_KEYS & set(data))
+    _require(
+        not misplaced,
+        f"blast-radius key(s) {misplaced} must be nested under `limits:`, not at the top "
+        f"level (a top-level placement is silently inactive)",
+    )
 
     objective = data.get("objective")
     _require(

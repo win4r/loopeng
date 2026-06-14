@@ -217,3 +217,28 @@ def test_fingerprint_ignores_none_optional_fields():
     # into the fingerprint payload, so adding such a field doesn't change the hash.
     assert "null" not in json.dumps(_strip_none(asdict(spec)))
     assert fingerprint(spec) == fingerprint(parse_spec(valid_spec_dict()))
+
+
+def test_top_level_blast_radius_block_is_rejected_not_silently_ignored():
+    # A natural mistake (the README section + LoopSpec field are both "blast_radius"):
+    # placing the block at the top level instead of under `limits:` must fail loudly,
+    # not be silently ignored (which would leave the gate inactive).
+    data = valid_spec_dict()
+    data["blast_radius"] = {"forbidden_paths": ["secrets/**"]}
+    with pytest.raises(SpecError, match="must be nested under"):
+        parse_spec(data)
+
+
+def test_top_level_blast_radius_subkeys_are_rejected():
+    data = valid_spec_dict()
+    data["forbidden_paths"] = ["secrets/**"]   # belongs under limits:
+    with pytest.raises(SpecError, match="limits"):
+        parse_spec(data)
+
+
+def test_blast_radius_under_limits_still_works():
+    data = valid_spec_dict()
+    data["limits"] = {"max_iterations": 3, "forbidden_paths": [".env"], "require_clean_git": True}
+    spec = parse_spec(data)
+    assert spec.blast_radius.forbidden_paths == [".env"]
+    assert spec.blast_radius.require_clean_git is True
