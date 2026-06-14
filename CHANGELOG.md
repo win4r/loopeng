@@ -4,6 +4,18 @@ All notable changes to loopeng are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions may change behavior).
 
+## [0.3.3] - 2026-06-14
+
+Footgun fix surfaced by an adversarial verifier during the WordCards iOS agentic dogfood.
+
+### Fixed
+- **Top-level blast-radius keys are now rejected instead of silently ignored.** Blast-radius
+  controls live under `limits:`, but the LoopSpec field and the README section are both called
+  `blast_radius`, so writing a top-level `blast_radius:` (or top-level `forbidden_paths` /
+  `allowed_paths` / `max_changed_files` / `require_clean_git`) was silently inactive — leaving a
+  user believing the write-set gate was on when it was not. `parse_spec` now raises a `SpecError`
+  naming the misplaced keys and pointing to `limits:`.
+
 ## [0.3.2] - 2026-06-14
 
 Small usability fix surfaced by dogfooding loopeng on a real iOS (SwiftUI) project.
