@@ -17,6 +17,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
+loopeng --version       # loopeng 0.2.0
 loopeng init            # scaffold loop.yaml + samples/ + .loopeng/
 loopeng run             # run the sample loop (fails once, self-corrects, passes)
 cat .loopeng/ledger.jsonl
@@ -238,6 +239,7 @@ under the **same `run_id`**.
 | no resumable run in the ledger | — |
 | the latest run already **succeeded** | — |
 | the latest run ended **`blocked`** | `--force` |
+| the latest run ended **`no_progress`** | `--force` |
 | the spec **fingerprint changed** since that run | `--force` |
 
 The **spec fingerprint** is a hash of the spec's *meaning* — every field of the parsed
@@ -338,4 +340,4 @@ Multi-agent orchestration, daemon mode, MCP integration, web UI, publishing.
 
 ## License
 
-MIT
+[MIT](LICENSE). See the [CHANGELOG](CHANGELOG.md) for release history.
