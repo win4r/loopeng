@@ -180,7 +180,7 @@
   <g>
     <rect x="330" y="668" width="300" height="56" rx="11" fill="#e8f7f0" stroke="#059669" stroke-width="2"/>
     <text x="350" y="691" class="h" font-size="13">公开验证器</text>
-    <text x="350" y="711" class="sub">agent 运行公开的 <tspan class="mono">xcodebuild</tspan> 测试 → ✓ 通过</text>
+    <text x="350" y="711" class="sub">agent 运行公开的测试套件 → ✓ 通过</text>
   </g>
   <!-- loopeng verify -->
   <g>

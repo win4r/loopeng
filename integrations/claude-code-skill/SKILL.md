@@ -1,6 +1,6 @@
 ---
 name: loopeng
-description: "Drive a real act → verify → feed-back agent loop with the installed loopeng CLI (the runtime — orchestrate it, don't reimplement it). Create or inspect a loop.yaml, run a coding agent (claude-code / codex / shell) against a DETERMINISTIC verifier (pytest, xcodebuild test, npm test, ruff, ...), and let loopeng own iteration, gating, isolation, the ledger, and stop conditions. Use when the user wants to iterate an agent until a build/test passes, run a self-correcting fix loop, add a small feature behind a test gate, or says 'use loopeng', 'loop until tests pass', 'run a verify loop', or 'fix this failing build/test autonomously'. Prefer --isolate."
+description: "Drive a real act → verify → feed-back agent loop with the installed loopeng CLI (the runtime — orchestrate it, don't reimplement it). Create or inspect a loop.yaml, run a coding agent (claude-code / codex / shell) against a DETERMINISTIC verifier (pytest, npm test, go test, ruff, ...), and let loopeng own iteration, gating, isolation, the ledger, and stop conditions. Use when the user wants to iterate an agent until a build/test passes, run a self-correcting fix loop, add a small feature behind a test gate, or says 'use loopeng', 'loop until tests pass', 'run a verify loop', or 'fix this failing build/test autonomously'. Prefer --isolate."
 user-invocable: true
 argument-hint: "<task to loop on, or path to a loop.yaml>"
 ---
@@ -61,8 +61,8 @@ limits:
   allowed_paths: ["src/**", "tests/**"]     # blast-radius: see §3
 ```
 
-- **Real verifiers only.** `pytest -q`, `npm test`, `go test ./...`, `ruff check .`, or a script
-  that runs `xcodegen generate && xcodebuild … test`. Optional numeric gate: `verify.baseline`
+- **Real verifiers only.** `pytest -q`, `npm test`, `go test ./...`, `ruff check .`, or a wrapper
+  script that compiles the project and runs its test target. Optional numeric gate: `verify.baseline`
   (e.g. coverage ≥ 90).
 - Full schema (context, baseline, hooks, YAML skills, plan.yaml): loopeng's README.
 
@@ -89,9 +89,10 @@ limits:
 - **`--isolate` ledger is ephemeral** (it lives in the worktree and is removed with it). If you
   need to inspect the ledger/feedback afterward, run **in-tree on a throwaway branch**
   (`git checkout -b loop-run && loopeng run --spec ...`, then `git checkout -` + delete the branch).
-- **Verifier feedback should lead with the failure.** Tools like `xcodebuild` print failures at the
-  END, and loopeng head-truncates ledger feedback (~800 chars); a `tail`-only wrapper buries the
-  assertion. Have your verifier script print the failing `error:` / assertion lines FIRST.
+- **Verifier feedback should lead with the failure.** Some compilers and test runners print the
+  actual failure at the END of a long log, and loopeng head-truncates ledger feedback (~800 chars);
+  a `tail`-only wrapper buries the assertion. Have your verifier script print the failing `error:` /
+  assertion lines FIRST.
 
 ## 4. Reading results
 
@@ -154,8 +155,8 @@ loopeng run --isolate --spec loop-feature.yaml   # runs in a worktree; main unto
 ```
 
 **Other stacks:** swap `verify` + `allowed_paths` for the project — e.g. `npm test` / `go test ./...`,
-or for iOS a script that runs `xcodegen generate && xcodebuild … test` (printing the failing
-`error:`/`XCTAssert` lines FIRST). **Fix-without-cheating:** same shape but exclude the tests from
+or for a compiled project a wrapper that builds then runs its test target (printing the failing
+error/assertion lines FIRST). **Fix-without-cheating:** same shape but exclude the tests from
 `allowed_paths` (e.g. `["src/**"]`), so a green run proves a real source fix.
 
 > SECURITY recap: these run a headless coding agent **unsandboxed** in the workspace. Always

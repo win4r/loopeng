@@ -189,7 +189,7 @@
   <g>
     <rect x="330" y="668" width="300" height="56" rx="11" fill="#e8f7f0" stroke="#059669" stroke-width="2"/>
     <text x="350" y="691" class="h" font-size="13">Public verifier</text>
-    <text x="350" y="711" class="sub">agent runs the public <tspan class="mono">xcodebuild</tspan> test → ✓ passes</text>
+    <text x="350" y="711" class="sub">agent runs the public test suite → ✓ passes</text>
   </g>
   <!-- loopeng verify (public + held-out) -->
   <g>
