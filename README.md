@@ -1,27 +1,49 @@
 # loopeng
 
+**English** · [简体中文](README.zh-CN.md)
+
 An **agent-agnostic Loop Engineering runner**. It drives any shell-callable coding
 agent (Claude Code, Codex, or a plain script) through a bounded
 `act → verify → feed-back` loop, defined by a portable `loop.yaml` spec.
 
-It's the small, well-tested core that the current crop of loop-engineering tools
-each implement a slice of: a **portable loop spec** (ralphify's idea), **agent-neutral
+It's a small, well-tested core that combines ideas proven across recent
+loop-engineering tools: a **portable loop spec** (ralphify), **agent-neutral
 adapters** (loom), **guardrails + auditable stop conditions** (openloop), a
 **deterministic verification gate** (the load-bearing half of Spotify's "Honk"
 findings), and **git-friendly state** via an append-only ledger.
 
+## Install
+
+loopeng is **not published to PyPI**, and the repository is currently **private** — so
+install from a release asset or from source (Python ≥ 3.9; no runtime dependencies beyond
+the standard library + PyYAML). Every path below requires access to the repo.
+
+```bash
+# 1) Download the wheel (or .tar.gz) from the latest release, then install the local file:
+#    https://github.com/win4r/loopeng/releases  ->  loopeng-0.3.3-py3-none-any.whl
+pip install ./loopeng-0.3.3-py3-none-any.whl
+
+# 2) …or from source:
+git clone https://github.com/win4r/loopeng && cd loopeng
+pip install .                # or:  pip install -e ".[dev]"  for a dev checkout + tests
+
+loopeng --version            # loopeng 0.3.3
+```
+
+> Because the repo is private, the unauthenticated `pip install <release-download-URL>` form
+> won't resolve — download the asset from the release page (where you're signed in) first, or
+> install from a clone.
+
 ## Quick start
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-
-loopeng --version       # prints the installed version (e.g. loopeng 0.3.1)
 loopeng init            # scaffold loop.yaml + samples/ + .loopeng/
-loopeng run             # run the sample loop (fails once, self-corrects, passes)
+loopeng run             # run the sample loop (fails once, self-corrects, passes in 2 iters)
 cat .loopeng/ledger.jsonl
 ```
+
+The scaffolded loop uses the `shell` agent (no API key, nothing billable): a mock agent
+writes `WIP` then `DONE`, and a verifier gates on the file containing `DONE`.
 
 ## How it works
 
@@ -29,7 +51,10 @@ Each iteration:
 
 1. Render the prompt template — `{{objective}}`, `{{iteration}}`, `{{feedback}}`
    (the previous verifier's output), and any `{{<context-command>}}` outputs.
-2. Run the **agent** adapter (prompt on stdin + `$LOOPENG_PROMPT`).
+2. Run the **agent** adapter. The prompt is always exported as `$LOOPENG_PROMPT`; the
+   `shell`/`mock` adapter also feeds it on **stdin**, while the `claude-code`/`codex` presets
+   pass it as a **CLI argument** (`claude -p "<prompt>"` / `codex exec "<prompt>"`) and leave
+   stdin empty.
 3. Run the **verifier** — exit `0` means pass. This is the gate.
 4. Append an iteration record to `.loopeng/ledger.jsonl`.
 5. On pass → `success`. On fail → feed the verifier output back and continue.
@@ -220,6 +245,16 @@ and write through it to a location outside the repo without tripping the gate; a
 `forbidden_paths`. For real isolation, run the agent in a container, VM, or a
 dedicated sandbox.
 
+**Reads are not confined (yet).** The gate is a *write-set* gate. loopeng does **not**
+restrict what the agent can **read**: an agent (e.g. `claude -p --dangerously-skip-permissions`)
+can read any file the process can — your source, other repos, `$HOME`, the inherited
+environment, secrets. So a verifier that depends on a hidden or *held-out* file is hidden
+only by **convention, not enforcement** (see [Real-agent dogfood](#real-agent-dogfood--the-held-out-feedback-barrier)).
+A read+write confinement option (running the agent under an OS-level filesystem sandbox)
+is a planned, not-yet-built capability. As a guardrail, top-level blast-radius keys placed
+outside `limits:` are **rejected** (`SpecError`) since v0.3.3, so a mis-nested gate can't
+silently no-op.
+
 ## Resume & live status
 
 A run's ledger is **resumable state**, not just an audit log. Every run has a stable
@@ -246,6 +281,7 @@ under the **same `run_id`**.
 | the latest run already **succeeded** | — |
 | the latest run ended **`blocked`** | `--force` |
 | the latest run ended **`no_progress`** | `--force` |
+| a run is still **live** (non-stale heartbeat, non-terminal phase) | `--force` |
 | the spec **fingerprint changed** since that run | `--force` |
 
 The **spec fingerprint** is a hash of the spec's *meaning* — every field of the parsed
@@ -481,10 +517,53 @@ newline-delimited JSON-RPC 2.0 (MCP `2025-03-26`). Tools: `loopeng_list_skills`,
 It is a local subprocess speaking on stdin/stdout — no network listener, no remote
 endpoint. It runs only the loops your skills/specs define, under the same guardrails.
 
+## Real-agent dogfood & the held-out feedback barrier
+
+loopeng was validated end-to-end by driving **real** coding agents against a real build.
+The target was *WordCards*, a small local-only SwiftUI **iOS** app whose verifier is
+`xcodegen generate && xcodebuild … test` on a simulator. With
+`agent: { type: claude-code, command: ["claude","-p","--dangerously-skip-permissions"] }`
+(and a parallel run with the `codex` preset), loopeng repeatedly fixed an intentionally
+broken Swift build/test through the xcodebuild gate.
+
+Two findings worth carrying into your own loops:
+
+- **Gate on *your* verifier, and make anti-cheat structural.** loopeng always runs its own
+  `verify` and gates on *that* (the agent's exit code is recorded, never trusted). A
+  test-running verifier is still *gameable* — an agent can "fix" a failing test by editing
+  the test. A prompt instruction is not enough; use the **mechanical** guard
+  `limits.allowed_paths: ["src/**"]` (an allowlist is strictly stronger than a
+  `forbidden_paths` denylist). The write-set gate runs **before** verify, so an edit outside
+  the app source is a `blast_radius_violation` and the run fails — a green run then proves a
+  real source fix.
+
+- **Making `{{feedback}}` genuinely load-bearing (the held-out barrier).** A self-verifying
+  agent like `claude -p` runs the test suite *during its own turn*, so a "compile error
+  masking a test failure" does **not** force a second iteration — the agent already sees both.
+  To prove the feedback channel is load-bearing, hide the second requirement **mechanically**:
+  the agent is told to run the *public* verifier, while loopeng's `verify` additionally runs a
+  **held-out** test that lives outside the agent's compiled target *and* outside its workspace
+  (hosted via an env var the verifier reads), pinning an **arbitrary rule the agent cannot
+  infer**. The agent satisfies the public contract in iteration 1 with no way to know the
+  held-out rule; loopeng feeds back the held-out failure; iteration 2 the agent implements the
+  rule **learned only from `{{feedback}}`**. We confirmed this with a real two-iteration claude
+  run and an independent multi-agent audit (iteration-1 transcript contained zero trace of the
+  rule; it first appears in iteration-2's feedback-bearing prompt). No loopeng change was
+  needed — an arbitrary `verify` command + the `{{feedback}}` relay already express a held-out
+  information barrier.
+
+  **Caveat (ties back to [Safety model](#safety-model)):** this barrier is airtight only
+  *as configured* — host the held-out file outside the workspace and keep it out of the
+  committed run branch. Because loopeng does **not confine reads**, a maximally aggressive
+  agent could read the verifier script and chase the env var to the held-out file. A true
+  hardness guarantee needs an OS-level filesystem sandbox around the agent (not yet built).
+
 ## Not yet built (intentionally out of scope)
 
-Daemon/long-running service mode, a web UI, deep (non-CLI) Claude/Codex API integration,
-and package publishing.
+- **PyPI publishing** — installation is from the GitHub release or source (see [Install](#install)).
+- **Filesystem read confinement / an OS-level agent sandbox** — today the blast-radius gate
+  constrains writes only (see [Safety model](#safety-model)).
+- Daemon/long-running service mode, a web UI, and a deep (non-CLI) Claude/Codex API integration.
 
 ## License
 
