@@ -4,6 +4,17 @@ All notable changes to loopeng are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions may change behavior).
 
+## [Unreleased]
+
+### Fixed
+- **`run --isolate` no longer silently discards the agent's commit when the workspace `.gitignore`
+  ignores `.loopeng/` as a directory.** The worktree finalize staged with a `.` pathspec, which
+  `git add` exits non-zero on (git's "paths ignored / Use -f" complaint about the ignored `.loopeng`
+  dir entry) — so loopeng raised, treated the run as "changed nothing", and dropped the worktree,
+  losing the agent's work. It now stages the explicit changed paths (which already exclude
+  `.loopeng/`) and captures both sides of a rename. Found while hardening the Codex CLI dogfood
+  example (`examples/codex-cli-demo/`); +regression test.
+
 ## [0.3.3] - 2026-06-14
 
 Footgun fix surfaced by an adversarial verifier during the WordCards iOS agentic dogfood.

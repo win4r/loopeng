@@ -1,12 +1,17 @@
-# Codex CLI demo — drive `codex exec` through loopeng against a DETERMINISTIC verifier.
+# Codex CLI dogfood — drive `codex exec` through loopeng with the full safety posture:
+# --isolate (a throwaway git worktree off HEAD), a blast-radius allow-list, and a REAL verifier.
 #
-# Builds the argv:  codex exec --sandbox workspace-write -c approval_policy=never "<prompt>"
-# Requires the Codex CLI installed AND logged in. Preflight without a login:  loopeng doctor
-# Run it:  cd examples/codex-cli-demo && loopeng run     (writes output.txt here; see README.md)
+#   Builds argv:  codex exec --sandbox workspace-write -c approval_policy=never "<prompt>"
+#   Run it (see README.md):  loopeng run --isolate --spec loop.yaml   (Codex installed + logged in)
 #
-# SECURITY: `--sandbox workspace-write` lets the agent edit files in the workspace; loopeng's
-# blast-radius gate is NOT a security sandbox. Run on a throwaway checkout or add `--isolate`.
-objective: "Write DONE into output.txt"
+# The gate is `python3 verify.py` (imports greeting.py, runs greeting(), asserts the result) — not a
+# mock. limits.allowed_paths confines the agent to greeting.py, so it cannot touch verify.py (the
+# gate) or anything else; a green run therefore proves a real source fix. The write-set gate runs
+# BEFORE verify, so an out-of-bounds edit fails the iteration with `blast_radius_violation`.
+#
+# SECURITY: `--sandbox workspace-write` + a headless loop runs UNSANDBOXED; loopeng's blast-radius
+# gate is NOT a security sandbox. Always run with `--isolate` (or a throwaway checkout).
+objective: "Make `python3 verify.py` pass by fixing greeting()"
 workspace: "."
 agent:
   type: codex
@@ -14,12 +19,18 @@ agent:
     sandbox: workspace-write      # let `codex exec` edit files   ->  --sandbox workspace-write
     approval_mode: never          # fully non-interactive          ->  -c approval_policy=never
 prompt: |
-  Create or overwrite `output.txt` in the current directory so it contains the word DONE, then stop.
+  `python3 verify.py` is failing. Edit ONLY `greeting.py` so that `greeting()` returns exactly the
+  string `Hello, loopeng!`, then stop. Do not edit verify.py or any other file.
   Verifier feedback from the previous attempt (empty on the first iteration):
   {{feedback}}
 verify:
-  command: ["python3", "verify.py"]   # deterministic gate: exit 0 iff output.txt contains DONE
+  command: ["python3", "verify.py"]   # real, deterministic gate: exit 0 iff greeting() is correct
 limits:
-  max_iterations: 5
+  max_iterations: 6
   max_consecutive_failures: 3
   timeout_seconds: 300
+  # Blast-radius write-set gate (needs a git repo; runs before verify). Confine the agent to the
+  # source file only — it may NOT edit the verifier or the tests, so a green run is a genuine fix.
+  allowed_paths:
+    - "greeting.py"
+  max_changed_files: 2              # a one-line fix shouldn't sprawl
