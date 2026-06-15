@@ -1,8 +1,10 @@
-# Codex CLI demo
+# Codex CLI dogfood
 
-Drives the **Codex CLI** (`codex exec`) through loopeng against a **deterministic verifier** —
-`agent.type: codex` with `sandbox: workspace-write` (and `approval_mode: never` for a fully
-non-interactive run). loopeng owns the loop; the verifier is the gate.
+Drives the **Codex CLI** (`codex exec`) through loopeng with loopeng's full safety posture:
+**`--isolate`** (a throwaway git worktree off `HEAD`), a **blast-radius allow-list**, and a
+**real, deterministic verifier**. The task is a genuine fix-the-code loop: `greeting()` in
+[`greeting.py`](greeting.py) is wrong, and [`verify.py`](verify.py) imports it, runs it, and
+exits `0` only when it returns `Hello, loopeng!`.
 
 The spec ([`loop.yaml`](loop.yaml)) builds this argv each iteration:
 
@@ -10,29 +12,60 @@ The spec ([`loop.yaml`](loop.yaml)) builds this argv each iteration:
 codex exec --sandbox workspace-write -c approval_policy=never "<prompt>"
 ```
 
-The task is trivial and the gate is deterministic: write `DONE` into `output.txt`; [`verify.py`](verify.py)
-exits `0` iff `output.txt` contains `DONE`, so loopeng iterates the agent until the gate passes.
+`limits.allowed_paths: ["greeting.py"]` confines the agent to the source file — it may **not** edit
+`verify.py` (the gate) or anything else; the write-set gate runs **before** the verifier, so an
+out-of-bounds edit fails the iteration with `blast_radius_violation`. A green run is therefore a
+**real** source fix, not a gamed verifier.
 
-## Run it
+Requires the [Codex CLI](https://github.com/openai/codex) **installed and logged in**. `loopeng
+doctor` resolves `codex` on PATH with **no login** (`0` ready · `7` missing); `loopeng run` makes a
+real, billable Codex call.
 
-Requires the [Codex CLI](https://github.com/openai/codex) **installed and logged in**.
+## Run it (isolated — recommended)
+
+`--isolate` needs a git repo, so use a throwaway copy (keeps your checkouts untouched and makes the
+agent's commit easy to inspect):
 
 ```bash
-cd examples/codex-cli-demo
-loopeng doctor        # preflight: resolves `codex` on PATH (NO login needed) — exit 0 = ready, 7 = missing
-loopeng run           # real, billable Codex call; iterates until output.txt contains DONE
-cat .loopeng/ledger.jsonl
+cp -r examples/codex-cli-demo /tmp/codex-demo && cd /tmp/codex-demo
+git init -q && git add -A && git commit -qm init
+loopeng doctor --spec loop.yaml                 # preflight (no login): exit 0 = codex resolves
+loopeng run --isolate --spec loop.yaml          # runs in a worktree off HEAD; your tree is untouched
 ```
 
-`doctor` works without a Codex login (it only resolves the binary); `loopeng run` performs a real
-Codex call, so it needs a working login. `output.txt` and `.loopeng/` are generated (gitignored here).
+On success loopeng prints `status: success | iterations: N | run: <id>` and surfaces the agent's
+edit as a `loop/<hex>` branch. **Evidence of what changed:**
+
+```bash
+git log --oneline -1 loop/<hex>                 # the agent's commit (hex from the run output)
+git diff HEAD..loop/<hex>                        # exactly the greeting.py fix — nothing else (allowed_paths held)
+git merge loop/<hex>                             # keep it, if you want
+```
+
+## Ledger & status evidence
+
+`--isolate` runs in a worktree that is removed on success, so its `.loopeng/ledger.jsonl` is
+ephemeral. To inspect the **persistent ledger + live status**, run in-tree on a throwaway branch:
+
+```bash
+cd /tmp/codex-demo && git checkout -q -b try
+loopeng run --spec loop.yaml
+cat .loopeng/ledger.jsonl                        # one JSON record per iteration: result, verify_exit,
+                                                 # blast_radius.changed_paths (== ["greeting.py"]), feedback
+loopeng status                                   # run_id, phase, iteration, stale
+git checkout -q - && git branch -D try           # restore
+```
+
+Each ledger iteration shows `blast_radius.changed_paths` (the allow-list held), `verify_exit`
+(`1` while `greeting()` is wrong, `0` once fixed), and the verifier `feedback` fed to the next turn.
 
 ## Notes
 
-- **`--sandbox workspace-write`** lets `codex exec` edit files in the workspace. loopeng's
-  blast-radius write-set gate is **not** a security sandbox — run on a throwaway checkout or
-  `--isolate`. See the top-level [README → Safety model](../../README.md#safety-model) and
-  [Codex CLI](../../README.md#codex-cli).
-- The argv mapping is asserted by `tests/test_codex_example.py` so this example can't drift from
-  the adapter — and that test needs **no Codex login**. A real end-to-end run is **opt-in only**:
-  `LOOPENG_CODEX_SMOKE=1 pytest tests/test_codex_example.py` (needs `codex` installed + logged in).
+- **`--sandbox workspace-write`** lets `codex exec` edit files; loopeng's blast-radius gate is a
+  *write-set* gate, **not** a security sandbox (it does not confine reads or network). Always
+  `--isolate` or a throwaway checkout — see the top-level [README → Safety model](../../README.md#safety-model)
+  and [Codex CLI](../../README.md#codex-cli).
+- The example→argv mapping and the `allowed_paths`/verifier shape are covered by
+  `tests/test_codex_example.py` (**no Codex login**); a real end-to-end run is **opt-in**
+  (`LOOPENG_CODEX_SMOKE=1 pytest tests/test_codex_example.py`, needs `codex` logged in).
+- loopeng accepts any deterministic verifier — swap `verify.py` for `pytest -q`, `npm test`, etc.

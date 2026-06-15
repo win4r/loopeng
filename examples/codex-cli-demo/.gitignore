@@ -1,3 +1,4 @@
 # generated when you run the demo
-output.txt
 .loopeng/
+__pycache__/
+*.pyc

@@ -121,23 +121,24 @@ def surface_diff(root, branch: str) -> str:
     return "\n".join(parts) + "\n"
 
 
-# loopeng's own state dir is bookkeeping, not the agent's work — it must never be
-# committed onto the surfaced/kept branch (which the user is told to merge).
-_EXCLUDE_STATE = ":(exclude,glob).loopeng/**"
-
-
 def _changed_paths_excluding_state(wt_path) -> List[str]:
-    """Porcelain change paths in the worktree, dropping anything under ``.loopeng/``."""
+    """Worktree porcelain change paths to stage, dropping anything under ``.loopeng/``.
+
+    Both sides of a rename ("old -> new") are returned so a staged commit is complete.
+    """
     result = _check(_git(["status", "--porcelain"], cwd=Path(wt_path)), "git status failed")
     paths: List[str] = []
     for line in result.stdout.splitlines():
         if len(line) < 4:
             continue
-        # "XY path" (renames are "old -> new"); take the final path, unquote.
-        path = line[3:].split(" -> ")[-1].strip().strip('"')
-        if ".loopeng" in Path(path).parts:
-            continue
-        paths.append(path)
+        body = line[3:]
+        # "XY path", or "XY old -> new" for renames/copies: stage both sides.
+        sides = body.split(" -> ") if " -> " in body else [body]
+        for side in sides:
+            path = side.strip().strip('"')
+            if not path or ".loopeng" in Path(path).parts:
+                continue
+            paths.append(path)
     return paths
 
 
@@ -158,9 +159,14 @@ def commit_all(wt_path, message: str) -> bool:
     inline so the commit never blocks on unset config.
     """
     wt_path = Path(wt_path)
-    if not has_uncommitted(wt_path):
+    paths = _changed_paths_excluding_state(wt_path)
+    if not paths:
         return False
-    _check(_git(["add", "-A", "--", ".", _EXCLUDE_STATE], cwd=wt_path), "git add failed")
+    # Stage exactly the agent's changed paths — NOT a "." pathspec. A "." add trips git's
+    # "paths ignored / Use -f" error (rc=1, which `_check` would raise) when the workspace
+    # .gitignore ignores `.loopeng/` as a directory, and that previously discarded the agent's
+    # commit. These paths already exclude `.loopeng/`, so loopeng's own state is never committed.
+    _check(_git(["add", "-A", "--", *paths], cwd=wt_path), "git add failed")
     result = _git(
         [
             "-c", "user.name=loopeng",

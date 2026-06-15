@@ -7,6 +7,7 @@ run in CI. A real end-to-end Codex run is OPT-IN only (set LOOPENG_CODEX_SMOKE=1
 import os
 import pathlib
 import shutil
+import subprocess
 
 import pytest
 
@@ -20,6 +21,7 @@ SPEC = DEMO / "loop.yaml"
 def test_example_files_exist():
     assert SPEC.is_file()
     assert (DEMO / "verify.py").is_file()
+    assert (DEMO / "greeting.py").is_file()
     assert (DEMO / "README.md").is_file()
 
 
@@ -27,8 +29,17 @@ def test_example_is_a_codex_workspace_write_loop():
     spec = load_spec(SPEC)
     assert spec.agent.type == "codex"
     assert spec.agent.capabilities.get("sandbox") == "workspace-write"
+    assert spec.agent.capabilities.get("approval_mode") == "never"
     # the verifier is a fixed, deterministic command (the gate), not the agent
     assert spec.verify.command == ["python3", "verify.py"]
+
+
+def test_example_confines_writes_with_blast_radius():
+    """The hardening: the agent is confined to the source by an allow-list (anti-cheat)."""
+    spec = load_spec(SPEC)
+    assert spec.blast_radius.allowed_paths == ["greeting.py"]   # agent may edit ONLY the source
+    assert spec.blast_radius.max_changed_files == 2
+    assert spec.blast_radius.active  # the gate is actually engaged
 
 
 def test_example_builds_expected_codex_argv():
@@ -58,14 +69,23 @@ def test_example_preflight_is_pure_and_login_free():
     reason="opt-in real Codex smoke test; set LOOPENG_CODEX_SMOKE=1 (needs `codex` installed + logged in)",
 )
 def test_codex_smoke_end_to_end(tmp_path, monkeypatch):
-    """OPT-IN ONLY: drive `loopeng run` on the demo with a real, logged-in Codex CLI."""
+    """OPT-IN ONLY: drive `loopeng run` on the demo with a real, logged-in Codex CLI.
+
+    Sets up a throwaway git repo (so the blast-radius allow-list is active) and runs in-tree,
+    then asserts the agent fixed greeting() — i.e. the loop converged through the real verifier.
+    """
     if shutil.which("codex") is None:
         pytest.skip("codex CLI not on PATH")
     from loopeng.cli import main
 
-    shutil.copy(SPEC, tmp_path / "loop.yaml")
-    shutil.copy(DEMO / "verify.py", tmp_path / "verify.py")
+    for name in ("loop.yaml", "verify.py", "greeting.py"):
+        shutil.copy(DEMO / name, tmp_path / name)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"],
+        cwd=tmp_path, check=True,
+    )
     monkeypatch.chdir(tmp_path)
-    code = main(["run"])
-    assert code == 0, "codex did not converge the demo loop"
-    assert "DONE" in (tmp_path / "output.txt").read_text()
+    assert main(["run"]) == 0, "codex did not converge the demo loop"
+    assert "Hello, loopeng!" in (tmp_path / "greeting.py").read_text()

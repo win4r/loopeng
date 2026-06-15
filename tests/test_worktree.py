@@ -214,6 +214,34 @@ def test_commit_all_excludes_loopeng_state(tmp_path):
     worktree.remove_worktree(root, wt_path, branch)
 
 
+def test_commit_all_when_workspace_gitignores_loopeng_dir(tmp_path):
+    """Regression: a workspace whose .gitignore ignores `.loopeng/` (the directory form) must not
+    break --isolate. A `.` pathspec `git add` trips git's 'paths ignored / Use -f' error (rc=1) on
+    the ignored `.loopeng` dir entry; `_check` then raised and the agent's commit was silently
+    discarded ('changed nothing'). Staging the explicit changed paths keeps the agent's work and
+    still excludes loopeng's own state."""
+    root = _init_repo(tmp_path / "repo")
+    (root / ".gitignore").write_text(".loopeng/\n")  # the natural form a user writes
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "ignore .loopeng")
+
+    wt_path, branch = worktree.create_isolated_worktree(root)
+    (wt_path / "real.txt").write_text("agent work\n")
+    (wt_path / ".loopeng").mkdir()
+    (wt_path / ".loopeng" / "ledger.jsonl").write_text('{"pid": 123}\n')
+
+    # Must NOT raise and must capture the work (the bug returned False / raised, losing it).
+    assert worktree.commit_all(wt_path, "loopeng: gitignored-state") is True
+    diff = worktree.surface_diff(root, branch)
+    assert "real.txt" in diff and ".loopeng" not in diff
+    tree = subprocess.run(
+        ["git", "-C", str(root), "ls-tree", "-r", "--name-only", branch],
+        capture_output=True, text=True,
+    ).stdout
+    assert "real.txt" in tree and ".loopeng" not in tree
+    worktree.remove_worktree(root, wt_path, branch)
+
+
 def test_commit_all_noop_when_only_loopeng_changed(tmp_path):
     """A run that touched only .loopeng/ is 'no real change' -> commit_all returns False."""
     root = _init_repo(tmp_path / "repo")
