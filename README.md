@@ -520,6 +520,32 @@ newline-delimited JSON-RPC 2.0 (MCP `2025-03-26`). Tools: `loopeng_list_skills`,
 It is a local subprocess speaking on stdin/stdout — no network listener, no remote
 endpoint. It runs only the loops your skills/specs define, under the same guardrails.
 
+## Driving loopeng from an agent (three layers)
+
+The word "skill" gets overloaded, so be precise: loopeng meets an AI agent at **three
+complementary layers** — a reusable *spec*, an agent's *judgment*, and a machine *interface*.
+They are not alternatives; they stack.
+
+| | **loopeng YAML skill** | **Claude Code skill** | **`loopeng mcp`** |
+|---|---|---|---|
+| What it is | a parameterized `loop.yaml` template (a `skill:` block + `params`) | a `SKILL.md` that teaches an agent the workflow + gotchas to *drive* loopeng | an MCP server (stdio JSON-RPC, `2025-03-26`) exposing loopeng actions as tools |
+| Layer | the **spec** — *what* loop to run | the **judgment** — *when / how* to loop, safely | the **interface** — *how* any agent invokes loopeng |
+| Consumed by | the loopeng runtime (`loopeng run --skill`, or `loopeng_run`) | Claude Code (auto-discovered; `/loopeng`) | any MCP client (Claude Code, Codex, …) |
+| Lives in | `.loopeng/skills/` > `~/.loopeng/skills/` > bundled (precedence) | `~/.claude/skills/loopeng/` (from [`integrations/claude-code-skill/`](integrations/claude-code-skill/)) | a subprocess: `loopeng mcp` |
+| Gives you | reuse — pin a loop once, parameterize per run | procedural knowledge — `--isolate`, mechanical anti-cheat, honest reporting | tools — `loopeng_list_skills` / `_doctor` / `_status` / `_run` |
+| More | [Reusable skills](#reusable-skills) | [`integrations/claude-code-skill/`](integrations/claude-code-skill/) | [MCP server](#mcp-server-loopeng-mcp) |
+
+**How they complement.** A **YAML skill** is the reusable spec — the *what*. The **MCP server**
+exposes loopeng's actions (including running a YAML skill via `loopeng_run`) to *any* agent over a
+standard protocol — the *how-to-invoke*. The **Claude Code skill** gives a Claude agent the
+*judgment*: when a loop is the right tool, to prefer `--isolate`, to make anti-cheat mechanical, and
+to report exit code + verifier output + branch + risks — the *when / how-to-decide*. So the Claude
+Code skill (or a human) **decides and drives**; the CLI or `loopeng mcp` **executes**; a YAML skill
+is often *what* gets executed. The skill **teaches**, the protocol **exposes**, the template
+**reuses** — and all three run the same gated `run_loop` core under the same guardrails. A
+non-Claude agent becomes "loopeng-usable" through the **CLI + `loopeng mcp`** (the universal machine
+interface); the **Claude Code skill** is the Claude-native layer on top.
+
 ## Real-agent dogfood & the held-out feedback barrier
 
 loopeng was validated end-to-end by driving **real** coding agents against a real build.

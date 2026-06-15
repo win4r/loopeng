@@ -476,6 +476,29 @@ JSON-RPC 2.0（MCP `2025-03-26`）。工具：`loopeng_list_skills`、`loopeng_d
 它是一个在 stdin/stdout 上对话的本地子进程 —— 没有网络监听器，没有远程端点。它只运行你的
 skills/specs 定义的循环，处于同样的护栏之下。
 
+## 从 agent 驱动 loopeng（三个层次）
+
+“技能/skill”一词容易混淆，所以要说清楚：loopeng 在**三个互补的层次**与 AI agent 相遇 —— 一个
+可复用的*规格*、一个 agent 的*判断*、以及一个机器*接口*。它们不是互相替代，而是层层叠加。
+
+| | **loopeng YAML 技能** | **Claude Code 技能** | **`loopeng mcp`** |
+|---|---|---|---|
+| 它是什么 | 一个带参数的 `loop.yaml` 模板（一个 `skill:` 块 + `params`） | 一个 `SKILL.md`，教 agent *驱动* loopeng 的工作流与坑 | 一个 MCP 服务器（stdio JSON-RPC，`2025-03-26`），把 loopeng 的动作作为工具暴露 |
+| 层次 | **规格** —— 运行*什么*循环 | **判断** —— *何时 / 如何*安全地循环 | **接口** —— 任意 agent *如何*调用 loopeng |
+| 由谁消费 | loopeng 运行时（`loopeng run --skill`，或 `loopeng_run`） | Claude Code（自动发现；`/loopeng`） | 任意 MCP 客户端（Claude Code、Codex…） |
+| 位于 | `.loopeng/skills/` > `~/.loopeng/skills/` > 内置（优先级） | `~/.claude/skills/loopeng/`（来自 [`integrations/claude-code-skill/`](integrations/claude-code-skill/)） | 一个子进程：`loopeng mcp` |
+| 给你 | 复用 —— 一次固定循环，按次传参 | 程序性知识 —— `--isolate`、机械式反作弊、诚实报告 | 工具 —— `loopeng_list_skills` / `_doctor` / `_status` / `_run` |
+| 详见 | 上文「可复用技能（skills）」 | [`integrations/claude-code-skill/`](integrations/claude-code-skill/) | 上文「MCP 服务器」 |
+
+**它们如何互补。** 一个 **YAML 技能**是可复用的规格 —— *什么*。**MCP 服务器**把 loopeng 的动作
+（包括通过 `loopeng_run` 运行一个 YAML 技能）以标准协议暴露给*任意* agent —— *如何调用*。
+**Claude Code 技能**给 Claude agent *判断*：何时该用循环、优先 `--isolate`、让反作弊机械化、并
+报告退出码 + 验证器输出 + 分支 + 风险 —— *何时 / 如何决策*。所以：Claude Code 技能（或人）
+**决策并驱动**；CLI 或 `loopeng mcp` **执行**；一个 YAML 技能往往就是被*执行*的东西。技能**教**、
+协议**暴露**、模板**复用** —— 三者都在同样的护栏下运行同一个带闸门的 `run_loop` 内核。非 Claude
+的 agent 通过 **CLI + `loopeng mcp`**（通用的机器接口）变得「loopeng 可用」；**Claude Code 技能**
+是其上的 Claude 原生层。
+
 ## 真实 agent dogfood + 保留集 held-out 反馈屏障
 
 loopeng 通过驱动**真实**编码 agent 去对付一个真实的构建，做了端到端验证。目标是 *WordCards* ——
