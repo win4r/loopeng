@@ -11,6 +11,12 @@
 **确定性验证闸门**（Spotify “Honk” 研究中真正起作用的那一半），以及通过一份只追加（append-only）
 账本实现的**对 git 友好的状态**。
 
+<p align="center">
+  <img src="docs/loopeng-flow.zh-CN.svg" alt="loopeng 一览：loop.yaml 规格 → agent → blast-radius 写入集闸门 → 验证器（exit 0 = 通过）→ 成功，或反馈 → 在 limits 内重试；每次迭代追加到可恢复的账本，并有实时心跳供 status/resume；平台层（skills、worktree 隔离、编排、watch/schedule 触发器、MCP 服务器与适配器插件）构建在同一内核上；以及保留集反馈 dogfood——agent 运行公开验证器，而 loopeng 额外运行一个位于 agent 触及范围之外的保留测试，因此那条保留需求只能经由反馈到达 agent" width="900">
+</p>
+
+<p align="center"><sub><i>核心 <code>act → verify → feed-back</code> 循环、平台层，以及保留集反馈 dogfood。动画 SVG —— 静态图本身即可完整呈现。</i></sub></p>
+
 ## 安装
 
 loopeng **未发布到 PyPI**，且仓库目前是**私有的** —— 因此请从 release 资产或源码安装（要求
