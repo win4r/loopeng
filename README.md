@@ -20,14 +20,14 @@ findings), and **git-friendly state** via an append-only ledger.
 
 ## Install
 
-loopeng is **not published to PyPI**, and the repository is currently **private** — so
-install from a release asset or from source (Python ≥ 3.9; no runtime dependencies beyond
-the standard library + PyYAML). Every path below requires access to the repo.
+loopeng is **not published to PyPI** — install from the GitHub release or from source
+(Python ≥ 3.9; no runtime dependencies beyond the standard library + PyYAML):
 
 ```bash
-# 1) Download the wheel (or .tar.gz) from the latest release, then install the local file:
-#    https://github.com/win4r/loopeng/releases  ->  loopeng-0.3.3-py3-none-any.whl
-pip install ./loopeng-0.3.3-py3-none-any.whl
+# 1) From the latest GitHub release (no clone needed):
+pip install https://github.com/win4r/loopeng/releases/download/v0.3.3/loopeng-0.3.3-py3-none-any.whl
+#    …or download the wheel / .tar.gz from https://github.com/win4r/loopeng/releases and
+#    install the local file:   pip install ./loopeng-0.3.3-py3-none-any.whl
 
 # 2) …or from source:
 git clone https://github.com/win4r/loopeng && cd loopeng
@@ -35,10 +35,6 @@ pip install .                # or:  pip install -e ".[dev]"  for a dev checkout 
 
 loopeng --version            # loopeng 0.3.3
 ```
-
-> Because the repo is private, the unauthenticated `pip install <release-download-URL>` form
-> won't resolve — download the asset from the release page (where you're signed in) first, or
-> install from a clone.
 
 ## Quick start
 
@@ -256,8 +252,9 @@ restrict what the agent can **read**: an agent (e.g. `claude -p --dangerously-sk
 can read any file the process can — your source, other repos, `$HOME`, the inherited
 environment, secrets. So a verifier that depends on a hidden or *held-out* file is hidden
 only by **convention, not enforcement** (see [Real-agent dogfood](#real-agent-dogfood--the-held-out-feedback-barrier)).
-A read+write confinement option (running the agent under an OS-level filesystem sandbox)
-is a planned, not-yet-built capability. As a guardrail, top-level blast-radius keys placed
+Confining the agent's **reads** (and its **network** access) requires an OS-level sandbox — that
+is **planned roadmap work** (see [Roadmap](#roadmap)), not something the write-set gate does today.
+As a guardrail, top-level blast-radius keys placed
 outside `limits:` are **rejected** (`SpecError`) since v0.3.3, so a mis-nested gate can't
 silently no-op.
 
@@ -564,11 +561,20 @@ Two findings worth carrying into your own loops:
   agent could read the verifier script and chase the env var to the held-out file. A true
   hardness guarantee needs an OS-level filesystem sandbox around the agent (not yet built).
 
-## Not yet built (intentionally out of scope)
+## Roadmap
+
+**Planned**
+
+- **OS-level read confinement + network sandbox for the agent.** The blast-radius gate constrains the
+  git *write-set* only — it does not limit what the agent **reads** or whether it can reach the
+  **network** (see [Safety model](#safety-model)). The planned option runs the agent under an
+  OS-level sandbox (filesystem read confinement + network egress control), so a held-out file or a
+  secret is hidden by *enforcement* rather than convention, and isolation no longer rests on
+  `--isolate` + trust.
+
+**Not yet built (intentionally out of scope)**
 
 - **PyPI publishing** — installation is from the GitHub release or source (see [Install](#install)).
-- **Filesystem read confinement / an OS-level agent sandbox** — today the blast-radius gate
-  constrains writes only (see [Safety model](#safety-model)).
 - Daemon/long-running service mode, a web UI, and a deep (non-CLI) Claude/Codex API integration.
 
 ## License
