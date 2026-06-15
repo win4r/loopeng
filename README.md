@@ -548,12 +548,11 @@ interface); the **Claude Code skill** is the Claude-native layer on top.
 
 ## Real-agent dogfood & the held-out feedback barrier
 
-loopeng was validated end-to-end by driving **real** coding agents against a real build.
-The target was *WordCards*, a small local-only SwiftUI **iOS** app whose verifier is
-`xcodegen generate && xcodebuild … test` on a simulator. With
+loopeng was validated end-to-end by driving **real** coding agents against a real project's
+build and test suite (not a mock). With
 `agent: { type: claude-code, command: ["claude","-p","--dangerously-skip-permissions"] }`
-(and a parallel run with the `codex` preset), loopeng repeatedly fixed an intentionally
-broken Swift build/test through the xcodebuild gate.
+(and a parallel run with the `codex` preset), loopeng repeatedly fixed an intentionally broken
+build/test through a deterministic verifier gate.
 
 Two findings worth carrying into your own loops:
 

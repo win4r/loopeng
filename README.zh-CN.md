@@ -501,11 +501,10 @@ skills/specs 定义的循环，处于同样的护栏之下。
 
 ## 真实 agent dogfood + 保留集 held-out 反馈屏障
 
-loopeng 通过驱动**真实**编码 agent 去对付一个真实的构建，做了端到端验证。目标是 *WordCards* ——
-一个小型、纯本地的 SwiftUI **iOS** 应用，其验证器是在模拟器上运行 `xcodegen generate && xcodebuild … test`。
+loopeng 通过驱动**真实**编码 agent 去对付一个真实项目的构建与测试套件（而非 mock），做了端到端验证。
 用 `agent: { type: claude-code, command: ["claude","-p","--dangerously-skip-permissions"] }`
-（以及一次用 `codex` 预设的并行 run），loopeng 反复地通过 xcodebuild 闸门修好了一个被故意弄坏的
-Swift 构建/测试。
+（以及一次用 `codex` 预设的并行 run），loopeng 反复地通过一个确定性验证器闸门修好了一个被故意弄坏的
+构建/测试。
 
 两条值得带进你自己循环的发现：
 
