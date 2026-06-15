@@ -175,6 +175,38 @@ loopeng doctor --json          # {"adapter_type": "...", "binary": "...", "resol
 shell 调用已安装的 CLI，并把提示词作为参数传入。capability→标志 的映射是尽力而为；请用 `command:`
 钉死参数，或对照你安装的 CLI 版本确认标志。
 
+### Codex CLI
+
+`agent.type: codex` 封装 Codex CLI 的非交互式 `codex exec`。授予 `sandbox: workspace-write` 让它能
+编辑文件，并用 `approval_mode: never` 做一个完全免交互的循环：
+
+```yaml
+agent:
+  type: codex
+  capabilities: { sandbox: workspace-write, approval_mode: never }
+verify:
+  command: ["pytest", "-q"]      # 任意确定性闸门
+```
+
+它构造出的 argv 是 `codex exec --sandbox workspace-write -c approval_policy=never "<prompt>"`
+（提示词是最后一个参数；`--ask-for-approval` 已从 CLI 移除，因此审批策略改用稳定的 `-c approval_policy=`
+覆盖项设置）。用 **`loopeng doctor`** 预检 —— 它在 PATH 上解析 `codex`，**无需登录**（退出码 `0` 就绪 ·
+`7` 缺失）；之后 `loopeng run` 才会发起一次真实、计费的 Codex 调用（那一步需要登录）。优先用 `--isolate`。
+
+可运行示例：**[`examples/codex-cli-demo/`](examples/codex-cli-demo/)**。示例→argv 的映射由
+`tests/test_codex_example.py` 覆盖（无需登录）；真正的端到端冒烟测试是**可选开启**的
+（`LOOPENG_CODEX_SMOKE=1 pytest tests/test_codex_example.py`）。
+
+**让 Codex 自动用上 loopeng。** 安装 **[`integrations/codex-skill/`](integrations/codex-skill/)** ——
+一份 `AGENTS.md` 策略（Codex 的指令文件），让 *“run a verify loop”*、*“fix until tests pass”*、
+*“跑闭环”* 这类说法触发 Codex 去查看/创建 `loop.yaml`（`agent.type: codex`）、运行 `doctor`、优先
+`run --isolate`、要求一个真实验证器，并报告 ledger/status、退出码、变更文件与风险。可按项目或全局安装：
+
+```bash
+cat integrations/codex-skill/AGENTS.md >> AGENTS.md             # 本仓库 / 你的项目
+# 或： mkdir -p ~/.codex && cat integrations/codex-skill/AGENTS.md >> ~/.codex/AGENTS.md   # 全局
+```
+
 ## 安全模型
 
 loopeng 可以施加**爆炸半径（blast-radius）控制** —— 这是一个**仓库写入集闸门**，而非安全沙箱。
@@ -495,9 +527,10 @@ skills/specs 定义的循环，处于同样的护栏之下。
 **Claude Code 技能**给 Claude agent *判断*：何时该用循环、优先 `--isolate`、让反作弊机械化、并
 报告退出码 + 验证器输出 + 分支 + 风险 —— *何时 / 如何决策*。所以：Claude Code 技能（或人）
 **决策并驱动**；CLI 或 `loopeng mcp` **执行**；一个 YAML 技能往往就是被*执行*的东西。技能**教**、
-协议**暴露**、模板**复用** —— 三者都在同样的护栏下运行同一个带闸门的 `run_loop` 内核。非 Claude
-的 agent 通过 **CLI + `loopeng mcp`**（通用的机器接口）变得「loopeng 可用」；**Claude Code 技能**
-是其上的 Claude 原生层。
+协议**暴露**、模板**复用** —— 三者都在同样的护栏下运行同一个带闸门的 `run_loop` 内核。**判断层按
+agent 以指令文件形式分发** —— Claude Code 用 `SKILL.md`（[`integrations/claude-code-skill/`](integrations/claude-code-skill/)），
+Codex 用 `AGENTS.md` 策略（[`integrations/codex-skill/`](integrations/codex-skill/)）—— 叠加在任意
+agent 都能调用的通用 **CLI + `loopeng mcp`** 机器接口之上。
 
 ## 真实 agent dogfood + 保留集 held-out 反馈屏障
 

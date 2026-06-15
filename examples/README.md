@@ -8,6 +8,7 @@ safe-by-default — they shell out only to the commands written here.
 | `plan.yaml` | multi-stage orchestration | `cd examples && loopeng orchestrate --plan plan.yaml` (shell-only, no agent CLI needed) |
 | `reverse_echo_plugin.py` | adapter plugin | `loopeng run --plugin ./examples/reverse_echo_plugin.py --spec your_loop.yaml` |
 | `.mcp.json` | MCP server | copy to your project root; Claude Code will launch `loopeng mcp` as a local stdio server |
+| `codex-cli-demo/` | Codex CLI agent | `cd examples/codex-cli-demo && loopeng doctor` (no login) then `loopeng run` (needs `codex` installed + logged in) |
 
 Other layers need no example file:
 

@@ -185,6 +185,40 @@ integrations** — loopeng shells out to the installed CLI and passes the prompt
 argument. The capability→flag mapping is best-effort; pin `command:` / confirm flags
 against your installed CLI version.
 
+### Codex CLI
+
+`agent.type: codex` wraps the Codex CLI's non-interactive `codex exec`. Grant `sandbox:
+workspace-write` so it can edit files, and `approval_mode: never` for a fully hands-off loop:
+
+```yaml
+agent:
+  type: codex
+  capabilities: { sandbox: workspace-write, approval_mode: never }
+verify:
+  command: ["pytest", "-q"]      # any deterministic gate
+```
+
+That builds the argv `codex exec --sandbox workspace-write -c approval_policy=never "<prompt>"`
+(the prompt is the final argument; `--ask-for-approval` was removed from the CLI, so the approval
+policy is set via the stable `-c approval_policy=` override). Preflight with **`loopeng doctor`**
+— it resolves `codex` on PATH and needs **no login** (exit `0` ready · `7` missing); `loopeng run`
+then makes a real, billable Codex call (which does need a login). Prefer `--isolate`.
+
+Runnable example: **[`examples/codex-cli-demo/`](examples/codex-cli-demo/)**. The example→argv
+mapping is covered by `tests/test_codex_example.py` (no login required); a real end-to-end smoke is
+**opt-in** (`LOOPENG_CODEX_SMOKE=1 pytest tests/test_codex_example.py`).
+
+**Make Codex reach for loopeng automatically.** Install **[`integrations/codex-skill/`](integrations/codex-skill/)** —
+an `AGENTS.md` policy (Codex's instruction file) so phrases like *"run a verify loop"*, *"fix until
+tests pass"*, or *"跑闭环"* make Codex inspect/create a `loop.yaml` (`agent.type: codex`), run
+`doctor`, prefer `run --isolate`, require a real verifier, and report ledger/status, exit code,
+changed files, and risks. Install per-project or globally:
+
+```bash
+cat integrations/codex-skill/AGENTS.md >> AGENTS.md             # this repo / your project
+# or: mkdir -p ~/.codex && cat integrations/codex-skill/AGENTS.md >> ~/.codex/AGENTS.md   # global
+```
+
 ## Safety model
 
 loopeng can apply **blast-radius controls** — a **repository write-set gate**, not a
@@ -542,9 +576,11 @@ standard protocol — the *how-to-invoke*. The **Claude Code skill** gives a Cla
 to report exit code + verifier output + branch + risks — the *when / how-to-decide*. So the Claude
 Code skill (or a human) **decides and drives**; the CLI or `loopeng mcp` **executes**; a YAML skill
 is often *what* gets executed. The skill **teaches**, the protocol **exposes**, the template
-**reuses** — and all three run the same gated `run_loop` core under the same guardrails. A
-non-Claude agent becomes "loopeng-usable" through the **CLI + `loopeng mcp`** (the universal machine
-interface); the **Claude Code skill** is the Claude-native layer on top.
+**reuses** — and all three run the same gated `run_loop` core under the same guardrails. The
+**judgment layer ships per agent as an instruction file** — a `SKILL.md` for Claude Code
+([`integrations/claude-code-skill/`](integrations/claude-code-skill/)) and an `AGENTS.md` policy for
+Codex ([`integrations/codex-skill/`](integrations/codex-skill/)) — layered on top of the universal
+**CLI + `loopeng mcp`** machine interface that any agent can call.
 
 ## Real-agent dogfood & the held-out feedback barrier
 

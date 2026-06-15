@@ -1,0 +1,25 @@
+# Codex CLI demo — drive `codex exec` through loopeng against a DETERMINISTIC verifier.
+#
+# Builds the argv:  codex exec --sandbox workspace-write -c approval_policy=never "<prompt>"
+# Requires the Codex CLI installed AND logged in. Preflight without a login:  loopeng doctor
+# Run it:  cd examples/codex-cli-demo && loopeng run     (writes output.txt here; see README.md)
+#
+# SECURITY: `--sandbox workspace-write` lets the agent edit files in the workspace; loopeng's
+# blast-radius gate is NOT a security sandbox. Run on a throwaway checkout or add `--isolate`.
+objective: "Write DONE into output.txt"
+workspace: "."
+agent:
+  type: codex
+  capabilities:
+    sandbox: workspace-write      # let `codex exec` edit files   ->  --sandbox workspace-write
+    approval_mode: never          # fully non-interactive          ->  -c approval_policy=never
+prompt: |
+  Create or overwrite `output.txt` in the current directory so it contains the word DONE, then stop.
+  Verifier feedback from the previous attempt (empty on the first iteration):
+  {{feedback}}
+verify:
+  command: ["python3", "verify.py"]   # deterministic gate: exit 0 iff output.txt contains DONE
+limits:
+  max_iterations: 5
+  max_consecutive_failures: 3
+  timeout_seconds: 300
