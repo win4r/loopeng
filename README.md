@@ -12,6 +12,12 @@ adapters** (loom), **guardrails + auditable stop conditions** (openloop), a
 **deterministic verification gate** (the load-bearing half of Spotify's "Honk"
 findings), and **git-friendly state** via an append-only ledger.
 
+<p align="center">
+  <img src="docs/loopeng-flow.svg" alt="loopeng at a glance: loop.yaml spec → agent → blast-radius write-set gate → verifier (exit 0 = pass) → success, or feedback → retry within limits; every iteration appends to a resumable ledger with a live heartbeat for status/resume; platform layers (skills, worktree isolation, orchestration, watch/schedule triggers, MCP server and adapter plugins) compose on the same core; and the held-out feedback dogfood where the agent runs a public verifier while loopeng additionally runs a held-out test outside the agent's reach, so the held-out requirement reaches the agent only through feedback" width="900">
+</p>
+
+<p align="center"><sub><i>The core <code>act → verify → feed-back</code> loop, the platform layers, and the held-out feedback dogfood. Animated SVG — the static diagram renders fully on its own.</i></sub></p>
+
 ## Install
 
 loopeng is **not published to PyPI**, and the repository is currently **private** — so
