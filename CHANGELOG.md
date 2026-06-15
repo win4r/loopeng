@@ -4,7 +4,10 @@ All notable changes to loopeng are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions may change behavior).
 
-## [Unreleased]
+## [0.3.4] - 2026-06-15
+
+Hardens the Codex CLI integration and fixes a worktree `--isolate` bug it surfaced. The remainder of
+the release is documentation and agent-integration work (no other runtime behavior change).
 
 ### Fixed
 - **`run --isolate` no longer silently discards the agent's commit when the workspace `.gitignore`
@@ -12,8 +15,24 @@ All notable changes to loopeng are documented here. The format is based on
   `git add` exits non-zero on (git's "paths ignored / Use -f" complaint about the ignored `.loopeng`
   dir entry) — so loopeng raised, treated the run as "changed nothing", and dropped the worktree,
   losing the agent's work. It now stages the explicit changed paths (which already exclude
-  `.loopeng/`) and captures both sides of a rename. Found while hardening the Codex CLI dogfood
-  example (`examples/codex-cli-demo/`); +regression test.
+  `.loopeng/`) and captures both sides of a rename. +regression test.
+
+### Added
+- **Codex CLI, documented end-to-end:** a "Codex CLI" README section and a runnable, hardened
+  `examples/codex-cli-demo/` — a real fix-the-code loop (`agent.type: codex` + `sandbox: workspace-write`,
+  an `--isolate`-first flow, a `limits.allowed_paths` allow-list, a deterministic verifier that runs
+  the agent's code, and ledger/status evidence). Offline tests tie the example to the codex argv; a
+  real end-to-end smoke is opt-in (`LOOPENG_CODEX_SMOKE`).
+- **Agent integration skills** under `integrations/`: a generic Claude Code skill
+  (`claude-code-skill/`, a `SKILL.md`) and a Codex skill (`codex-skill/`, an `AGENTS.md` policy) that
+  teach those agents to drive loopeng.
+- **Animated flow diagrams** (EN + zh-CN) embedded in the READMEs.
+
+### Changed (docs)
+- README now installs from the public repo (still **not on PyPI**), adds an OS-level read/network
+  sandbox roadmap and a "Driving loopeng from an agent (three layers)" comparison (loopeng YAML skill
+  vs Claude Code skill vs `loopeng mcp`), ships a Simplified-Chinese `README.zh-CN.md`, and frames the
+  real-agent / held-out-feedback lessons generically (no project-specific references).
 
 ## [0.3.3] - 2026-06-14
 
